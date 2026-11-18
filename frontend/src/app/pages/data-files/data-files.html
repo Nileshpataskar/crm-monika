@@ -1,0 +1,179 @@
+<div class="max-w-[1400px] mx-auto px-4 py-5 lg:px-8 lg:py-7">
+  <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+    <div>
+      <h1>Data files</h1>
+      <p class="mt-1 text-ink-2">Which months are loaded and which Excel files they came from.</p>
+    </div>
+    <button class="btn btn-primary" (click)="downloadBackup()" [disabled]="backingUp()">
+      @if (backingUp()) { <span class="spinner"></span> Preparing… } @else { <span class="icon">download</span>Download full backup }
+    </button>
+  </div>
+
+  <div class="alert mb-6 bg-tile-blue/8 text-ink-2">
+    <span class="icon text-tile-blue">info</span>
+    <span>The backup is one Excel file with every order and quotation (one sheet per month, in your usual columns).
+      To restore it, upload it like any other Excel file.</span>
+  </div>
+
+  @if (notice()) {
+    <div class="alert success mb-4"><span class="icon">check_circle</span>{{ notice() }}</div>
+  }
+  @if (error()) {
+    <div class="alert error mb-4"><span class="icon">error</span>{{ error() }}</div>
+  }
+
+  @if (loading()) {
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      @for (i of [1, 2, 3]; track i) {
+        <div class="card h-[150px] animate-pulse"></div>
+      }
+    </div>
+  } @else {
+    <!-- Months -->
+    <h2 class="section-title">Months loaded</h2>
+    @if (!months().length && !years().length) {
+      <div class="card p-10 text-center text-ink-2">
+        No data yet.
+        @if (auth.isAdmin()) {
+          <button class="text-accent font-medium hover:underline" (click)="upload.open()">Upload an Excel file</button>
+        }
+      </div>
+    }
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      @for (p of monthsThenYears(); track p.type + p.period) {
+        <div class="card p-5 flex flex-col">
+          <div class="flex items-start gap-4">
+            <span class="icon-tile" [class]="p.type === 'orders' ? 'green' : 'violet'">
+              <span class="icon">{{ p.type === 'orders' ? 'calendar_month' : 'request_quote' }}</span>
+            </span>
+            <div class="min-w-0 flex-1">
+              <div class="text-lg font-bold leading-tight">{{ p.type === 'orders' ? p.label : 'Quotations ' + p.label }}</div>
+              <div class="text-ink-2">
+                <b class="tabular-nums">{{ p.rows }}</b> {{ rowsWord(p.type, p.rows) }}
+              </div>
+              @if (p.manual) {
+                <div class="mt-1 text-xs text-ink-3">+ {{ p.manual }} entered in the app</div>
+              }
+              @if (p.hidden) {
+                <div class="mt-1 text-xs text-ink-3">
+                  + {{ p.hidden }} shown under a later month (newer status)
+                </div>
+              }
+            </div>
+          </div>
+          <div class="mt-4 flex items-center gap-2 text-xs text-ink-3 min-w-0">
+            <span class="icon !text-base">description</span>
+            <span class="truncate">{{ p.upload_id ? p.filename : 'No Excel file, only rows entered in the app' }}</span>
+          </div>
+          <div class="mt-4 pt-3 border-t border-line flex flex-wrap gap-2">
+            @if (p.upload_id && hasFile(p.upload_id)) {
+              <button class="btn btn-sm" (click)="view(p.upload_id, p.filename!)"><span class="icon">table_view</span>View file</button>
+            }
+            @if (auth.isAdmin() && p.rows + p.hidden > 0) {
+              <button class="btn btn-sm btn-ghost ml-auto !text-critical-ink hover:!bg-critical-soft" (click)="askDeletePeriod(p)">
+                <span class="icon">delete</span>Delete {{ p.type === 'orders' ? 'month' : 'year' }}
+              </button>
+            }
+          </div>
+        </div>
+      }
+    </div>
+
+    <!-- Files -->
+    <h2 class="section-title mt-8">Uploaded files</h2>
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Data it provides</th>
+              <th class="right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (u of uploads(); track u.id) {
+              <tr>
+                <td>
+                  <div class="flex items-center gap-3">
+                    <span class="icon-tile soft green"><span class="icon !text-xl">description</span></span>
+                    <div class="min-w-0">
+                      <div class="font-medium truncate max-w-[320px]">{{ u.filename }}</div>
+                      <div class="text-xs text-ink-3">{{ u.uploaded_at | date: 'd MMM y, h:mm a' }}</div>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <div class="flex flex-wrap gap-1.5">
+                    @for (p of u.periods; track p.type + p.period) {
+                      <span class="chip" [class.good]="p.type === 'orders'">
+                        {{ p.type === 'orders' ? p.label : 'Quotes ' + p.label }} · {{ p.rows }}
+                      </span>
+                    } @empty {
+                      <span class="text-[13px] text-ink-3">No data left: its month was deleted or uploaded again from a newer file.</span>
+                    }
+                  </div>
+                </td>
+                <td>
+                  <div class="flex justify-end gap-1.5">
+                    @if (u.has_file) {
+                      <button class="btn btn-sm" (click)="view(u.id, u.filename)"><span class="icon">table_view</span>View</button>
+                      <button class="btn btn-sm" (click)="download(u)" title="Download the original file" aria-label="Download">
+                        <span class="icon">download</span>
+                      </button>
+                    } @else {
+                      <span class="text-xs text-ink-3 self-center mr-1" title="Uploaded before files were kept">File not kept</span>
+                    }
+                    @if (auth.isAdmin()) {
+                      <button class="btn btn-sm btn-ghost !text-critical-ink hover:!bg-critical-soft" (click)="askDeleteUpload(u)"
+                              title="Delete this file and its data" aria-label="Delete">
+                        <span class="icon">delete</span>
+                      </button>
+                    }
+                  </div>
+                </td>
+              </tr>
+            } @empty {
+              <tr><td colspan="3" class="!py-10 text-center text-ink-3">No files uploaded yet.</td></tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  }
+</div>
+
+@if (viewing(); as v) {
+  <app-excel-viewer [uploadId]="v.id" [filename]="v.filename" (closed)="viewing.set(null)" />
+}
+
+@if (pending(); as p) {
+  <app-confirm-dialog [title]="p.title" confirmLabel="Delete permanently" [busy]="deleting()" [ready]="!!p.preview"
+                      (confirmed)="confirmDelete()" (cancelled)="pending.set(null)">
+    @if (!p.preview) {
+      Checking what will be removed…
+    } @else {
+      <ul class="space-y-2">
+        @for (d of p.preview.deleted; track d.type + d.period) {
+          <li>
+            <b class="text-ink">{{ d.type === 'orders' ? d.label : 'Quotations ' + d.label }}</b>:
+            {{ d.rows }} {{ rowsWord(d.type, d.rows) }} from Excel will be removed from the dashboard and lists.
+            Rows typed into the app are kept.
+            @for (r of d.restored; track r.label) {
+              <div class="mt-1 flex gap-1.5 text-tile-blue">
+                <span class="icon !text-base">sync</span>
+                <span>{{ r.rows }} orders from {{ r.label }} will show again with their {{ r.label }} status.</span>
+              </div>
+            }
+          </li>
+        } @empty {
+          <li>This file no longer provides any data. Only the file and its record are removed.</li>
+        }
+        @if (p.preview.file_deleted) {
+          <li>The stored Excel file is deleted too.</li>
+        }
+      </ul>
+      <p class="mt-3 font-medium text-critical-ink">This can't be undone, but you can upload the Excel again later.</p>
+    }
+  </app-confirm-dialog>
+}

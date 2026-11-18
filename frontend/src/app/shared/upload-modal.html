@@ -1,0 +1,229 @@
+<dialog
+  #dialogEl
+  class="m-auto p-0 w-[min(680px,calc(100vw-24px))] max-h-[calc(100dvh-24px)] rounded-2xl border-0 bg-surface text-ink shadow-2xl backdrop:bg-sidebar/55 backdrop:backdrop-blur-[2px]"
+  aria-labelledby="upload-title"
+  (close)="dialog.close()"
+  (cancel)="onCancel($event)"
+  (click)="onBackdropClick($event)"
+>
+  <div class="flex flex-col max-h-[calc(100dvh-24px)]">
+    <!-- Header -->
+    <div class="flex items-start gap-3 px-6 pt-5 pb-4 border-b border-line">
+      <span class="icon-tile green"><span class="icon">cloud_upload</span></span>
+      <div class="flex-1 min-w-0">
+        <h2 id="upload-title" class="!text-lg">Upload Excel</h2>
+        <p class="text-[13px] text-ink-3">Monthly PO summary sheets or the quotation workbook</p>
+      </div>
+      <button class="btn btn-ghost btn-sm !px-1.5" (click)="dialog.close()" [disabled]="busy()" aria-label="Close">
+        <span class="icon">close</span>
+      </button>
+    </div>
+
+    <!-- Body -->
+    <div class="flex-1 overflow-y-auto px-6 py-5">
+      @if (error()) {
+        <div class="alert error mb-4" role="alert"><span class="icon">error</span><span>{{ error() }}</span></div>
+      }
+
+      @switch (step()) {
+        <!-- 1. Choose a file -->
+        @case ('pick') {
+          <label
+            class="flex flex-col items-center justify-center gap-2 px-6 py-10 rounded-xl border-2 border-dashed cursor-pointer text-center transition-colors"
+            [class]="dragging() ? 'border-accent bg-accent-soft' : 'border-line-strong hover:bg-surface-2 hover:border-accent'"
+            (dragover)="onDragOver($event)"
+            (dragleave)="dragging.set(false)"
+            (drop)="onDrop($event)"
+          >
+            <span class="icon !text-[40px] text-accent">upload_file</span>
+            <span class="font-semibold text-base">Drop the Excel file here</span>
+            <span class="text-ink-2">or <span class="text-accent font-medium">browse</span> · .xlsx up to 4 MB</span>
+            <input type="file" class="sr-only" accept=".xlsx,.xlsm" #input (change)="pick(input.files); input.value = ''" />
+          </label>
+
+          <ul class="mt-5 space-y-2.5 text-[13px] text-ink-2">
+            <li class="flex gap-2.5">
+              <span class="icon !text-lg text-tile-blue">calendar_month</span>
+              <span>Name each monthly sheet with its month, like <b class="text-ink">JUNE - 2026</b>. That's how the month is detected.</span>
+            </li>
+            <li class="flex gap-2.5">
+              <span class="icon !text-lg text-tile-green">sync</span>
+              <span>Uploading a month again <b class="text-ink">replaces</b> that month. Other months are not touched.</span>
+            </li>
+            <li class="flex gap-2.5">
+              <span class="icon !text-lg text-tile-violet">info</span>
+              <span>Orders repeated from an earlier month are <b class="text-ink">updated, not duplicated</b>, so totals never double.</span>
+            </li>
+          </ul>
+
+          @if (monthsLoaded().length || yearsLoaded().length) {
+            <div class="mt-5 pt-4 border-t border-line">
+              <div class="text-xs font-semibold uppercase tracking-wide text-ink-3">Already loaded</div>
+              <div class="mt-2 flex flex-wrap gap-2">
+                @for (p of monthsLoaded(); track p.period) {
+                  <span class="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-accent-soft text-accent text-[13px] font-medium">
+                    <span class="icon !text-base">calendar_month</span>{{ p.label }}
+                    <span class="text-accent/60 tabular-nums">· {{ p.rows }}</span>
+                  </span>
+                }
+                @for (p of yearsLoaded(); track p.period) {
+                  <span class="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-tile-violet/10 text-tile-violet text-[13px] font-medium">
+                    <span class="icon !text-base">request_quote</span>Quotes {{ p.label }}
+                    <span class="opacity-60 tabular-nums">· {{ p.rows }}</span>
+                  </span>
+                }
+              </div>
+              @if (recent().length) {
+                <div class="mt-3 text-xs text-ink-3">
+                  Last upload: {{ recent()[0].filename }}, {{ recent()[0].uploaded_at | date: 'd MMM, h:mm a' }}
+                </div>
+              }
+            </div>
+          }
+        }
+
+        <!-- 2. Server is checking / importing -->
+        @case ('checking') {
+          <div class="flex flex-col items-center gap-3 py-14 text-ink-2">
+            <span class="size-8 rounded-full border-[3px] border-accent/25 border-t-accent animate-spin"></span>
+            Checking {{ file()?.name }}…
+          </div>
+        }
+        @case ('importing') {
+          <div class="flex flex-col items-center gap-3 py-14 text-ink-2">
+            <span class="size-8 rounded-full border-[3px] border-accent/25 border-t-accent animate-spin"></span>
+            Importing {{ plan()?.total_rows }} rows…
+          </div>
+        }
+
+        <!-- 3. Preview: what will happen to each sheet -->
+        @case ('preview') {
+          @if (file(); as f) {
+            <div class="flex items-center gap-3 p-3 rounded-xl bg-surface-2 border border-line">
+              <span class="icon text-tile-green">description</span>
+              <div class="flex-1 min-w-0">
+                <div class="font-medium truncate">{{ f.name }}</div>
+                <div class="text-xs text-ink-3">{{ fileSize(f.size) }} · checked, nothing saved yet</div>
+              </div>
+              <button class="btn btn-ghost btn-sm" (click)="reset()">Change file</button>
+            </div>
+          }
+
+          <div class="mt-4 space-y-3">
+            @for (s of plan()?.sheets; track s.sheet) {
+              <div class="rounded-xl border p-4" [class]="s.errors.length ? 'border-critical/40 bg-critical-soft/40' : 'border-line'">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="font-semibold">{{ s.sheet }}</span>
+                  <span class="chip" [class.good]="s.type && !s.errors.length">{{ sheetLabel(s.type) }}</span>
+                  @if (s.period_label && s.type) {
+                    <span class="ml-auto inline-flex items-center gap-1 text-[13px] font-medium text-ink-2">
+                      <span class="icon !text-base">calendar_month</span>{{ s.period_label }}
+                    </span>
+                  }
+                </div>
+
+                @if (!s.type) {
+                  <p class="mt-1.5 text-[13px] text-ink-3">Not a PO summary or quotation sheet. It will be ignored.</p>
+                } @else if (s.errors.length) {
+                  <ul class="mt-2 space-y-1 text-[13px] text-critical-ink">
+                    @for (e of s.errors; track e) {
+                      <li class="flex gap-1.5"><span class="icon !text-base">error</span>{{ e }}</li>
+                    }
+                  </ul>
+                } @else {
+                  <div class="mt-2.5 flex flex-wrap items-center gap-2 text-[13px]">
+                    @if (s.existing_rows === 0) {
+                      <span class="chip good">New {{ s.type === 'orders' ? 'month' : 'year' }}</span>
+                      <span class="text-ink-2"><b class="text-ink tabular-nums">{{ s.rows }}</b> rows will be added</span>
+                    } @else {
+                      <span class="chip warning">Replaces {{ s.period_label }}</span>
+                      <span class="text-ink-2">
+                        <b class="text-ink tabular-nums">{{ s.existing_rows }}</b> stored rows will be replaced by
+                        <b class="text-ink tabular-nums">{{ s.rows }}</b>
+                      </span>
+                    }
+                  </div>
+                  @for (c of s.carried_over; track c.from) {
+                    <p class="mt-2 flex gap-1.5 text-[13px] text-ink-2">
+                      <span class="icon !text-base text-tile-blue">sync</span>
+                      <span><b class="text-ink">{{ c.rows }}</b> orders from {{ c.from }} appear again here and will be updated
+                        with this sheet's status (not duplicated).</span>
+                    </p>
+                  }
+                  @for (c of s.skipped_newer; track c.in) {
+                    <p class="mt-2 flex gap-1.5 text-[13px] text-ink-2">
+                      <span class="icon !text-base text-tile-amber">info</span>
+                      <span><b class="text-ink">{{ c.rows }}</b> rows skipped: {{ c.in }} already has a newer version of them.</span>
+                    </p>
+                  }
+                }
+
+                @if (s.warnings.length && s.type) {
+                  <details class="mt-3 group">
+                    <summary class="flex items-center gap-1.5 cursor-pointer text-[13px] font-medium text-warning-ink list-none">
+                      <span class="icon !text-base">warning</span>
+                      {{ s.warnings.length }} {{ s.warnings.length === 1 ? 'thing' : 'things' }} to check in the Excel file
+                      <span class="icon !text-base transition-transform group-open:rotate-90">chevron_right</span>
+                    </summary>
+                    <ul class="mt-2 ml-6 list-disc space-y-1 text-[13px] text-ink-2">
+                      @for (w of s.warnings; track $index) {
+                        <li>{{ w }}</li>
+                      }
+                    </ul>
+                  </details>
+                }
+              </div>
+            }
+          </div>
+
+          @if (!plan()?.can_import) {
+            <div class="alert error mt-4">
+              <span class="icon">error</span>
+              <span>This file can't be imported yet. Fix the errors above in Excel, save, and upload again.</span>
+            </div>
+          }
+        }
+
+        <!-- 4. Done -->
+        @case ('done') {
+          <div class="flex flex-col items-center text-center py-6">
+            <span class="icon-tile green !size-14 !rounded-full"><span class="icon !text-[30px]">check</span></span>
+            <h3 class="mt-4 text-lg font-semibold">Import complete</h3>
+            <p class="mt-1 text-ink-2">{{ result()?.total_rows }} rows saved. The dashboard is already updated.</p>
+          </div>
+          <ul class="divide-y divide-line rounded-xl border border-line">
+            @for (s of result()?.sheets; track s.sheet) {
+              @if (s.type && !s.errors.length) {
+                <li class="flex items-center gap-3 px-4 py-3">
+                  <span class="icon text-tile-green" style="font-variation-settings: 'FILL' 1">check_circle</span>
+                  <span class="flex-1">{{ s.period_label }} <span class="text-ink-3">· {{ sheetLabel(s.type) }}</span></span>
+                  <span class="tabular-nums font-medium">{{ s.rows }} rows</span>
+                </li>
+              }
+            }
+          </ul>
+        }
+      }
+    </div>
+
+    <!-- Footer -->
+    <div class="flex flex-wrap items-center justify-end gap-2 px-6 py-4 border-t border-line bg-surface-2 rounded-b-2xl">
+      @switch (step()) {
+        @case ('preview') {
+          <button class="btn" (click)="reset()">Back</button>
+          <button class="btn btn-primary" (click)="confirmImport()" [disabled]="!plan()?.can_import">
+            <span class="icon">upload</span>Import {{ plan()?.total_rows }} rows
+          </button>
+        }
+        @case ('done') {
+          <button class="btn" (click)="reset()">Upload another</button>
+          <a class="btn" routerLink="/orders" (click)="dialog.close()">View orders</a>
+          <button class="btn btn-primary" (click)="dialog.close()">Done</button>
+        }
+        @default {
+          <button class="btn" (click)="dialog.close()" [disabled]="busy()">Cancel</button>
+        }
+      }
+    </div>
+  </div>
+</dialog>

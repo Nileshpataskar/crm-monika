@@ -1,0 +1,212 @@
+<div class="max-w-[1400px] mx-auto px-4 py-5 lg:px-8 lg:py-7">
+  <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+    <div>
+      <h1>Orders</h1>
+      <p class="mt-1 text-ink-2">Every PO line, from the Excel sheets and typed in here. Click a row to see its full status.</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <button class="btn" (click)="exportExcel()" [disabled]="exporting()" title="Download all orders as Excel (backup)">
+        @if (exporting()) { <span class="spinner"></span> Exporting… } @else { <span class="icon">download</span>Export Excel }
+      </button>
+      @if (auth.isAdmin()) {
+        <button class="btn" (click)="showColumns.set(true)"><span class="icon">view_column</span>Columns</button>
+        <button class="btn btn-primary" (click)="editing.set('new')"><span class="icon">add</span>New order</button>
+      }
+    </div>
+  </div>
+
+  <!-- Summary tiles: click one to filter the table -->
+  <div class="grid gap-4 grid-cols-2 xl:grid-cols-4 mb-6">
+    @for (t of tiles(); track t.status) {
+      <button type="button" (click)="status.set(t.status)"
+              class="card p-4 flex items-center gap-4 text-left cursor-pointer transition hover:shadow-md"
+              [class]="status() === t.status ? '!border-accent ring-2 ring-accent/20' : ''">
+        <span class="icon-tile" [class]="t.color"><span class="icon">{{ t.icon }}</span></span>
+        <span class="min-w-0">
+          <span class="block text-2xl font-bold tabular-nums leading-tight">{{ loading() ? '–' : t.count }}</span>
+          <span class="block text-ink-2 font-medium">{{ t.label }}</span>
+          @if (t.amount !== null) {
+            <span class="block text-xs text-ink-3 tabular-nums">{{ t.amount | inr: 'whole' }}</span>
+          }
+        </span>
+      </button>
+    }
+  </div>
+
+  <div class="card overflow-hidden">
+    <div class="flex flex-wrap items-center gap-2.5 p-4 border-b border-line">
+      <div class="relative">
+        <span class="icon absolute left-2.5 top-2 text-ink-3 !text-lg pointer-events-none">search</span>
+        <input class="input w-72 max-w-full pl-9" placeholder="Search description, PO, invoice…"
+               [(ngModel)]="search" aria-label="Search orders" />
+      </div>
+      <select class="input" [(ngModel)]="customer" aria-label="Customer">
+        <option value="">All customers</option>
+        @for (c of customers(); track c) {
+          <option [value]="c">{{ c }}</option>
+        }
+      </select>
+      <select class="input" [(ngModel)]="status" aria-label="Status">
+        @for (opt of statusOptions; track opt.value) {
+          <option [value]="opt.value">{{ opt.label }}</option>
+        }
+      </select>
+      @if (search() || customer() || status() !== 'all') {
+        <button class="btn btn-ghost btn-sm" (click)="clearFilters()">Clear filters</button>
+      }
+    </div>
+
+    @if (loading()) {
+      <div class="flex items-center justify-center gap-3 p-12 text-ink-3"><span class="spinner !size-5 text-accent"></span>Loading orders…</div>
+    } @else if (error()) {
+      <div class="p-4"><div class="alert error"><span class="icon">error</span>{{ error() }}</div></div>
+    } @else {
+      <div class="overflow-x-auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th class="cursor-pointer hover:text-ink" (click)="sortBy('order_date')">Order date {{ sortIcon('order_date') }}</th>
+              <th>Customer / PO</th>
+              <th>Description</th>
+              <th class="cursor-pointer hover:text-ink" (click)="sortBy('invoice_date')">Invoice {{ sortIcon('invoice_date') }}</th>
+              <th class="right cursor-pointer hover:text-ink" (click)="sortBy('total_amount')">Amount {{ sortIcon('total_amount') }}</th>
+              @for (f of orderFields(); track f.id) {
+                <th>{{ f.label }}</th>
+              }
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (o of filtered(); track o.id) {
+              <tr class="cursor-pointer hover:[&>td]:bg-surface-2" (click)="selected.set(o)">
+                <td class="whitespace-nowrap">{{ (o.order_date | date: 'd MMM y') ?? '—' }}</td>
+                <td class="whitespace-nowrap">
+                  <div class="font-medium">{{ o.customer ?? '—' }}</div>
+                  <div class="text-xs text-ink-3 mt-0.5">{{ o.po_number ? 'PO ' + o.po_number : 'No PO yet' }}</div>
+                </td>
+                <td class="min-w-[260px]">
+                  <div class="font-medium line-clamp-2">{{ o.description }}</div>
+                  <div class="text-xs text-ink-3 mt-0.5">
+                    {{ meta(o) }}
+                  </div>
+                </td>
+                <td class="whitespace-nowrap">
+                  @if (o.invoice_number) {
+                    <div>#{{ o.invoice_number }}</div>
+                    <div class="text-xs text-ink-3 mt-0.5">{{ o.invoice_date | date: 'd MMM y' }}</div>
+                  } @else {
+                    <span class="text-ink-3">—</span>
+                  }
+                </td>
+                <td class="right tabular-nums font-medium whitespace-nowrap">{{ o.total_amount | inr }}</td>
+                @for (f of orderFields(); track f.id) {
+                  <td class="whitespace-nowrap max-w-[220px] truncate">{{ formatExtra(f, o.extra?.[f.key]) }}</td>
+                }
+                <td>
+                  <div class="flex flex-col items-start gap-1">
+                    @let pay = paymentStatus(o);
+                    <span class="chip" [class]="pay.tone">{{ pay.label }}</span>
+                    @if (grnStatus(o); as grn) {
+                      <span class="chip" [class]="grn.tone">{{ grn.label }}</span>
+                    }
+                  </div>
+                </td>
+              </tr>
+            } @empty {
+              <tr>
+                <td [attr.colspan]="6 + orderFields().length" class="!py-12 text-center text-ink-2">
+                  @if (orders().length) { No orders match these filters. } @else { No orders yet. Upload a PO summary sheet. }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+      <div class="flex justify-between px-4 py-3 border-t border-line text-[13px] text-ink-2">
+        <span>{{ filtered().length }} of {{ orders().length }} orders</span>
+        <span>Total: <span class="font-semibold text-ink tabular-nums">{{ filteredTotal() | inr }}</span></span>
+      </div>
+    }
+  </div>
+</div>
+
+<!-- Detail panel -->
+@if (selected(); as o) {
+  <div class="fixed inset-0 z-50 bg-black/30" (click)="selected.set(null)"></div>
+  <aside class="fixed inset-y-0 right-0 z-50 w-full max-w-[460px] bg-surface shadow-2xl flex flex-col"
+         role="dialog" aria-label="Order details">
+    <div class="flex items-start gap-3 p-5 border-b border-line">
+      <div class="flex-1 min-w-0">
+        <div class="text-xs text-ink-3">
+          {{ o.customer }} ·
+          @if (o.upload_id) { {{ o.sheet_name }}, Excel row {{ o.excel_row }} } @else { Entered in the app }
+        </div>
+        <h2 class="mt-1 !text-base leading-snug">{{ o.description }}</h2>
+      </div>
+      @if (auth.isAdmin()) {
+        <button class="btn btn-sm" (click)="editing.set(o)"><span class="icon">edit</span>Edit</button>
+      }
+      <button class="btn btn-ghost btn-sm" (click)="selected.set(null)" aria-label="Close"><span class="icon">close</span></button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto p-5">
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-ink-3">Progress</h3>
+      <ol class="mt-3">
+        @for (step of steps(); track step.label; let last = $last) {
+          <li class="relative flex gap-3 pb-4">
+            @if (!last) {
+              <span class="absolute left-[11px] top-6 bottom-0 w-px bg-line"></span>
+            }
+            @switch (step.state) {
+              @case ('done') { <span class="icon !text-2xl text-good" style="font-variation-settings: 'FILL' 1">check_circle</span> }
+              @case ('pending') { <span class="icon !text-2xl text-warning">schedule</span> }
+              @default { <span class="grid place-items-center size-6"><span class="size-2 rounded-full bg-line-strong"></span></span> }
+            }
+            <div>
+              <div class="font-medium" [class.text-ink-3]="step.state === 'none'">{{ step.label }}</div>
+              <div class="text-[13px] text-ink-3">{{ step.detail }}</div>
+            </div>
+          </li>
+        }
+      </ol>
+
+      <h3 class="mt-4 text-xs font-semibold uppercase tracking-wide text-ink-3">Amounts</h3>
+      <dl class="mt-2 grid grid-cols-2 gap-y-1.5 text-[13px] tabular-nums">
+        <dt class="text-ink-2">Amount</dt><dd class="text-right">{{ o.amount | inr }}</dd>
+        <dt class="text-ink-2">CGST</dt><dd class="text-right">{{ o.cgst | inr }}</dd>
+        <dt class="text-ink-2">SGST</dt><dd class="text-right">{{ o.sgst | inr }}</dd>
+        <dt class="font-semibold pt-1.5 border-t border-line">Total</dt>
+        <dd class="font-semibold text-right pt-1.5 border-t border-line">{{ o.total_amount | inr }}</dd>
+      </dl>
+
+      <h3 class="mt-6 text-xs font-semibold uppercase tracking-wide text-ink-3">Details</h3>
+      <dl class="mt-2 grid grid-cols-[140px_1fr] gap-y-1.5 text-[13px]">
+        <dt class="text-ink-2">Order date</dt><dd>{{ (o.order_date | date: 'd MMM y') ?? '—' }}</dd>
+        <dt class="text-ink-2">PO number</dt><dd>{{ o.po_number ?? '—' }}</dd>
+        <dt class="text-ink-2">PO email</dt><dd>{{ o.po_email_received ? 'Received' : o.po_email_received === false ? 'Not received' : '—' }}</dd>
+        <dt class="text-ink-2">Vendor code</dt><dd>{{ o.vendor_code ?? '—' }}</dd>
+        <dt class="text-ink-2">Quotation</dt><dd>{{ o.quotation_number ?? '—' }}</dd>
+        <dt class="text-ink-2">Category</dt><dd>{{ o.category ?? '—' }}</dd>
+        <dt class="text-ink-2">Quantity</dt><dd>{{ o.qty !== null ? o.qty + ' ' + (o.unit ?? '') : '—' }}</dd>
+        <dt class="text-ink-2">Location</dt><dd>{{ o.delivery_location ?? '—' }}</dd>
+        <dt class="text-ink-2">Indentor</dt><dd>{{ o.indentor ?? '—' }}</dd>
+        <dt class="text-ink-2">Delivery date</dt><dd>{{ (o.delivery_date | date: 'd MMM y') ?? '—' }}</dd>
+        <dt class="text-ink-2">Invoice date</dt><dd>{{ (o.invoice_date | date: 'd MMM y') ?? '—' }}</dd>
+        <dt class="text-ink-2">JCC</dt><dd>{{ o.jcc ?? '—' }}</dd>
+        <dt class="text-ink-2">Purchase bill</dt><dd>{{ o.purchase_bill_received ? 'Received' : o.purchase_bill_received === false ? 'Not received' : '—' }}</dd>
+        @for (f of orderFields(); track f.id) {
+          <dt class="text-ink-2">{{ f.label }}</dt><dd>{{ formatExtra(f, o.extra?.[f.key]) }}</dd>
+        }
+      </dl>
+    </div>
+  </aside>
+}
+
+@if (editing(); as e) {
+  <app-record-form entity="orders" [row]="e === 'new' ? null : e" [customFields]="fields()" [suggestions]="suggestions()"
+                   (saved)="onSaved()" (deleted)="onDeleted()" (closed)="editing.set(null)" />
+}
+
+@if (showColumns()) {
+  <app-columns-dialog entity="orders" [fields]="fields()" (changed)="onSaved()" (closed)="showColumns.set(false)" />
+}

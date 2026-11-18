@@ -1,0 +1,145 @@
+<div class="max-w-[1400px] mx-auto px-4 py-5 lg:px-8 lg:py-7">
+  <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+    <div>
+      <h1>Quotations</h1>
+      <p class="mt-1 text-ink-2">Quotes sent to customers, and whether each one turned into a PO.
+        @if (auth.isAdmin()) { Click a row to edit it. }</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <button class="btn" (click)="exportExcel()" [disabled]="exporting()" title="Download all quotations as Excel (backup)">
+        @if (exporting()) { <span class="spinner"></span> Exporting… } @else { <span class="icon">download</span>Export Excel }
+      </button>
+      @if (auth.isAdmin()) {
+        <button class="btn" (click)="showColumns.set(true)"><span class="icon">view_column</span>Columns</button>
+        <button class="btn btn-primary" (click)="editing.set('new')"><span class="icon">add</span>New quotation</button>
+      }
+    </div>
+  </div>
+
+  <!-- Summary tiles: click one to filter the table -->
+  <div class="grid gap-4 grid-cols-2 xl:grid-cols-4 mb-6">
+    @for (t of tiles(); track t.status) {
+      <button type="button" (click)="status.set(t.status)"
+              class="card p-4 flex items-center gap-4 text-left cursor-pointer transition hover:shadow-md"
+              [class]="status() === t.status ? '!border-accent ring-2 ring-accent/20' : ''">
+        <span class="icon-tile" [class]="t.color"><span class="icon">{{ t.icon }}</span></span>
+        <span class="min-w-0">
+          <span class="block text-2xl font-bold tabular-nums leading-tight">{{ loading() ? '–' : t.count }}</span>
+          <span class="block text-ink-2 font-medium">{{ t.label }}</span>
+          <span class="block text-xs text-ink-3 tabular-nums">{{ t.amount | inr: 'whole' }}</span>
+        </span>
+      </button>
+    }
+  </div>
+
+  <div class="card overflow-hidden">
+    <div class="flex flex-wrap items-center gap-2.5 p-4 border-b border-line">
+      <div class="relative">
+        <span class="icon absolute left-2.5 top-2 text-ink-3 !text-lg pointer-events-none">search</span>
+        <input class="input w-72 max-w-full pl-9" placeholder="Search work, quote no., indentor…"
+               [(ngModel)]="search" aria-label="Search quotations" />
+      </div>
+      <select class="input" [(ngModel)]="location" aria-label="Location">
+        <option value="">All locations</option>
+        @for (l of locations(); track l) {
+          <option [value]="l">{{ l }}</option>
+        }
+      </select>
+      <select class="input" [(ngModel)]="status" aria-label="Status">
+        <option value="all">Any status</option>
+        <option value="open">Awaiting PO</option>
+        <option value="won">PO received</option>
+        <option value="completed">Work completed</option>
+        <option value="not_completed">Work not completed</option>
+      </select>
+      @if (search() || location() || status() !== 'all') {
+        <button class="btn btn-ghost btn-sm" (click)="clearFilters()">Clear filters</button>
+      }
+    </div>
+
+    @if (loading()) {
+      <div class="flex items-center justify-center gap-3 p-12 text-ink-3"><span class="spinner !size-5 text-accent"></span>Loading quotations…</div>
+    } @else if (error()) {
+      <div class="p-4"><div class="alert error"><span class="icon">error</span>{{ error() }}</div></div>
+    } @else {
+      <div class="overflow-x-auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Quote</th>
+              <th>Work</th>
+              <th>Location</th>
+              <th class="right">Quoted</th>
+              <th>PO</th>
+              @for (f of quoteFields(); track f.id) {
+                <th>{{ f.label }}</th>
+              }
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (q of filtered(); track q.id) {
+              <tr (click)="open(q)" [class]="auth.isAdmin() ? 'cursor-pointer hover:[&>td]:bg-surface-2' : ''">
+                <td class="whitespace-nowrap font-medium">{{ q.quote_number ? '#' + q.quote_number : '—' }}</td>
+                <td class="min-w-[280px]">
+                  <div class="font-medium">{{ q.work_title }}</div>
+                  <div class="text-xs text-ink-3 mt-0.5">
+                    {{ q.work_type ? q.work_type + ' · ' : '' }}{{ q.indentor }}
+                  </div>
+                </td>
+                <td class="whitespace-nowrap">{{ q.work_location ?? '—' }}</td>
+                <td class="right tabular-nums whitespace-nowrap">{{ q.total_amount | inr }}</td>
+                <td class="whitespace-nowrap">
+                  @if (q.po_number) {
+                    <div>{{ q.po_number }}</div>
+                    <div class="text-xs text-ink-3 mt-0.5 tabular-nums">{{ q.po_amount | inr }}</div>
+                  } @else {
+                    <span class="text-ink-3">—</span>
+                  }
+                </td>
+                @for (f of quoteFields(); track f.id) {
+                  <td class="whitespace-nowrap max-w-[220px] truncate">{{ formatExtra(f, q.extra?.[f.key]) }}</td>
+                }
+                <td>
+                  <div class="flex flex-col items-start gap-1">
+                    @let qs = quoteStatus(q);
+                    <span class="chip" [class]="qs.tone">{{ qs.label }}</span>
+                    @let ws = workStatus(q);
+                    <span class="chip" [class]="ws.tone">{{ ws.label }}</span>
+                    @if (q.po_number && q.payment_received !== null) {
+                      <span class="chip" [class]="q.payment_received ? 'good' : 'serious'">
+                        {{ q.payment_received ? 'Paid' : 'Unpaid' }}
+                      </span>
+                    }
+                  </div>
+                </td>
+              </tr>
+            } @empty {
+              <tr>
+                <td [attr.colspan]="6 + quoteFields().length" class="!py-12 text-center text-ink-2">
+                  @if (quotes().length) { No quotations match these filters. } @else { No quotations yet. Upload a quotation sheet. }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+      <div class="flex flex-wrap justify-between gap-2 px-4 py-3 border-t border-line text-[13px] text-ink-2">
+        <span>{{ filtered().length }} of {{ quotes().length }} quotations</span>
+        <span>
+          Quoted: <span class="font-semibold text-ink tabular-nums">{{ summary().quoted | inr }}</span>
+          · PO value: <span class="font-semibold text-ink tabular-nums">{{ summary().po | inr }}</span>
+        </span>
+      </div>
+    }
+  </div>
+</div>
+
+@if (editing(); as e) {
+  <app-record-form entity="quotations" [row]="e === 'new' ? null : e" [customFields]="fields()" [suggestions]="suggestions()"
+                   (saved)="onChanged()" (deleted)="onChanged()" (closed)="editing.set(null)" />
+}
+
+@if (showColumns()) {
+  <app-columns-dialog entity="quotations" [fields]="fields()" (changed)="onChanged()" (closed)="showColumns.set(false)" />
+}

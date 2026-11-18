@@ -1,0 +1,110 @@
+<dialog
+  #dialogEl
+  class="m-auto p-0 w-[min(780px,calc(100vw-24px))] max-h-[calc(100dvh-24px)] rounded-2xl border-0 bg-surface text-ink shadow-2xl backdrop:bg-sidebar/55 backdrop:backdrop-blur-[2px]"
+  [attr.aria-label]="(isNew() ? 'New ' : 'Edit ') + noun()"
+  (close)="closed.emit()"
+  (cancel)="saving() && $event.preventDefault()"
+>
+  <form class="flex flex-col max-h-[calc(100dvh-24px)]" (submit)="$event.preventDefault(); save()" novalidate>
+    <!-- Header -->
+    <div class="flex items-center gap-3 px-6 py-4 border-b border-line">
+      <span class="icon-tile" [class]="entity() === 'orders' ? 'blue' : 'violet'">
+        <span class="icon">{{ isNew() ? 'add' : 'edit' }}</span>
+      </span>
+      <div class="flex-1 min-w-0">
+        <h2 class="!text-lg capitalize">{{ isNew() ? 'New ' + noun() : 'Edit ' + noun() }}</h2>
+        @if (row(); as r) {
+          <p class="text-xs text-ink-3">
+            @if (r.upload_id) { From {{ r.sheet_name }}, Excel row {{ r.excel_row }} } @else { Entered in the app }
+          </p>
+        }
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm !px-1.5" (click)="close()" aria-label="Close"><span class="icon">close</span></button>
+    </div>
+
+    <!-- Fields -->
+    <div class="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+      @if (row()?.upload_id) {
+        <div class="alert warn">
+          <span class="icon">info</span>
+          <span>This {{ noun() }} came from an Excel file. If <b>{{ row()!.sheet_name }}</b> is uploaded again, the Excel
+            version replaces these changes. To keep a change, also make it in the Excel file.</span>
+        </div>
+      }
+
+      @for (section of sections(); track section.title) {
+        <fieldset>
+          <legend class="text-xs font-semibold uppercase tracking-wide text-ink-3 mb-3">{{ section.title }}</legend>
+          <div class="grid gap-x-4 gap-y-3.5 sm:grid-cols-2">
+            @for (f of section.fields; track f.key) {
+              <div class="flex flex-col gap-1.5" [class]="f.wide || f.type === 'textarea' ? 'sm:col-span-2' : ''">
+                <label class="label" [for]="'f-' + f.key">
+                  {{ f.label }} @if (f.required) { <span class="text-critical">*</span> }
+                </label>
+                @switch (f.type) {
+                  @case ('textarea') {
+                    <textarea [id]="'f-' + f.key" rows="2" class="input !h-auto py-2 resize-y"
+                              [value]="values()[f.key] ?? ''" (input)="set(f.key, $any($event.target).value)"></textarea>
+                  }
+                  @case ('yesno') {
+                    <select [id]="'f-' + f.key" class="input" [value]="values()[f.key] ?? ''" (change)="set(f.key, $any($event.target).value)">
+                      <option value="">—</option>
+                      <option value="true">{{ f.yesNo?.[0] ?? 'Yes' }}</option>
+                      <option value="false">{{ f.yesNo?.[1] ?? 'No' }}</option>
+                    </select>
+                  }
+                  @default {
+                    <input [id]="'f-' + f.key" class="input" [type]="f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'"
+                           [attr.min]="f.type === 'number' ? 0 : null" [attr.step]="f.type === 'number' ? 'any' : null"
+                           [attr.list]="datalistId(f)" autocomplete="off"
+                           [value]="values()[f.key] ?? ''" (input)="set(f.key, $any($event.target).value)" />
+                    @if (f.suggest) {
+                      <datalist [id]="datalistId(f)">
+                        @for (s of suggestions()[f.key] ?? []; track s) { <option [value]="s"></option> }
+                      </datalist>
+                    }
+                  }
+                }
+                @if (f.hint) { <span class="text-xs text-ink-3">{{ f.hint }}</span> }
+              </div>
+            }
+          </div>
+        </fieldset>
+      }
+
+      @if (total() !== null) {
+        <div class="flex items-center justify-between rounded-xl bg-accent-soft px-4 py-3">
+          <span class="font-medium text-accent">Total with GST</span>
+          <span class="text-lg font-bold tabular-nums">{{ total() | inr }}</span>
+        </div>
+      }
+    </div>
+
+    <!-- Footer -->
+    <div class="flex flex-wrap items-center gap-2 px-6 py-4 border-t border-line bg-surface-2 rounded-b-2xl">
+      @if (error()) {
+        <div class="alert error w-full mb-1" role="alert"><span class="icon">error</span>{{ error() }}</div>
+      }
+      @if (!isNew()) {
+        <button type="button" class="btn btn-ghost !text-critical-ink hover:!bg-critical-soft" (click)="confirmDelete.set(true)">
+          <span class="icon">delete</span>Delete
+        </button>
+      }
+      <span class="flex-1"></span>
+      <button type="button" class="btn" (click)="close()" [disabled]="saving()">Cancel</button>
+      <button type="submit" class="btn btn-primary" [disabled]="saving()">
+        @if (saving()) { <span class="spinner"></span> } @else { <span class="icon">check</span> }
+        {{ saving() ? 'Saving…' : isNew() ? 'Add ' + noun() : 'Save changes' }}
+      </button>
+    </div>
+  </form>
+</dialog>
+
+@if (confirmDelete()) {
+  <app-confirm-dialog [title]="'Delete this ' + noun() + '?'" [busy]="deleting()" (confirmed)="remove()" (cancelled)="confirmDelete.set(false)">
+    It is removed from the lists and the dashboard.
+    @if (row()?.upload_id) {
+      It came from an Excel file, so it will come back if <b>{{ row()!.sheet_name }}</b> is uploaded again.
+    }
+  </app-confirm-dialog>
+}

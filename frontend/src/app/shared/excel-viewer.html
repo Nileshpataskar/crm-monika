@@ -1,0 +1,94 @@
+<dialog
+  #dialogEl
+  class="m-auto p-0 w-[min(1280px,calc(100vw-24px))] h-[calc(100dvh-48px)] rounded-2xl border-0 bg-surface text-ink shadow-2xl backdrop:bg-sidebar/55 backdrop:backdrop-blur-[2px]"
+  aria-label="Excel file viewer"
+  (close)="closed.emit()"
+  (click)="onBackdropClick($event)"
+>
+  <div class="flex flex-col h-full">
+    <!-- Header -->
+    <div class="flex flex-wrap items-center gap-3 px-5 py-4 border-b border-line">
+      <span class="icon-tile green !size-10"><span class="icon">table_view</span></span>
+      <div class="flex-1 min-w-0">
+        <h2 class="!text-base truncate">{{ filename() }}</h2>
+        <p class="text-xs text-ink-3">The data area of each sheet, as uploaded. Totals and pivot tables below it are not shown.</p>
+      </div>
+      <div class="relative">
+        <span class="icon absolute left-2.5 top-2 text-ink-3 !text-lg pointer-events-none">search</span>
+        <input class="input w-56 pl-9" placeholder="Find in sheet…" [value]="filter()" (input)="filter.set($any($event.target).value)"
+               aria-label="Find in sheet" />
+      </div>
+      <button class="btn" (click)="download()" [disabled]="downloading()">
+        <span class="icon">download</span>{{ downloading() ? 'Downloading…' : 'Download' }}
+      </button>
+      <button class="btn btn-ghost !px-2" (click)="close()" aria-label="Close"><span class="icon">close</span></button>
+    </div>
+
+    @if (error()) {
+      <div class="p-5"><div class="alert error"><span class="icon">error</span>{{ error() }}</div></div>
+    } @else if (!view()) {
+      <div class="flex-1 grid place-items-center text-ink-3">
+        <span class="size-8 rounded-full border-[3px] border-accent/25 border-t-accent animate-spin"></span>
+      </div>
+    } @else {
+      <!-- Sheet tabs -->
+      <div class="flex gap-1 px-4 pt-3 border-b border-line overflow-x-auto">
+        @for (s of view()!.sheets; track s.name; let i = $index) {
+          <button
+            class="flex items-center gap-2 h-10 px-3.5 -mb-px rounded-t-lg border border-b-0 text-[13px] font-medium whitespace-nowrap cursor-pointer"
+            [class]="tab() === i ? 'bg-surface border-line text-ink' : 'bg-transparent border-transparent text-ink-3 hover:text-ink'"
+            (click)="tab.set(i); filter.set('')"
+          >
+            <span class="icon !text-base" [class]="s.type ? 'text-tile-green' : 'text-ink-3'">grid_on</span>
+            {{ s.name }}
+            @if (s.period_label) {
+              <span class="chip good !h-5">{{ s.period_label }}</span>
+            } @else {
+              <span class="chip !h-5">{{ sheetType(s.type) }}</span>
+            }
+          </button>
+        }
+      </div>
+
+      @if (sheet(); as s) {
+        @if (!s.headers.length) {
+          <div class="flex-1 grid place-items-center text-ink-3">This sheet is empty.</div>
+        } @else {
+          <!-- Grid: header row and row numbers stay in place while scrolling -->
+          <div class="flex-1 overflow-auto">
+            <table class="border-separate border-spacing-0 text-[13px] tabular-nums">
+              <thead>
+                <tr>
+                  <th class="sticky top-0 left-0 z-20 w-12 min-w-12 bg-surface-2 border-b border-r border-line"></th>
+                  @for (h of s.headers; track $index) {
+                    <th class="sticky top-0 z-10 px-3 py-2 text-left font-semibold text-ink-2 bg-surface-2 border-b border-r border-line whitespace-nowrap">
+                      {{ h }}
+                    </th>
+                  }
+                </tr>
+              </thead>
+              <tbody>
+                @for (r of rows(); track r.excel_row) {
+                  <tr class="hover:[&>td]:bg-accent-soft/50">
+                    <td class="sticky left-0 z-10 px-2 py-1.5 text-right text-xs text-ink-3 bg-surface-2 border-b border-r border-line">
+                      {{ r.excel_row }}
+                    </td>
+                    @for (c of r.cells; track $index) {
+                      <td class="px-3 py-1.5 border-b border-r border-line whitespace-nowrap max-w-[340px] truncate" [title]="c">{{ c }}</td>
+                    }
+                  </tr>
+                } @empty {
+                  <tr><td [attr.colspan]="s.headers.length + 1" class="px-4 py-10 text-center text-ink-3">No matching rows.</td></tr>
+                }
+              </tbody>
+            </table>
+          </div>
+          <div class="px-5 py-2.5 border-t border-line text-xs text-ink-3">
+            {{ rows().length }} of {{ s.rows.length }} rows · {{ s.headers.length }} columns
+            @if (s.truncated) { · only the first 2,000 rows are shown }
+          </div>
+        }
+      }
+    }
+  </div>
+</dialog>

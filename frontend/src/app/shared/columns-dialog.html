@@ -1,0 +1,76 @@
+<dialog
+  #dialogEl
+  class="m-auto p-0 w-[min(560px,calc(100vw-24px))] max-h-[calc(100dvh-24px)] rounded-2xl border-0 bg-surface text-ink shadow-2xl backdrop:bg-sidebar/55 backdrop:backdrop-blur-[2px]"
+  aria-label="Custom columns"
+  (close)="closed.emit()"
+>
+  <div class="flex flex-col max-h-[calc(100dvh-24px)]">
+    <div class="flex items-center gap-3 px-6 py-4 border-b border-line">
+      <span class="icon-tile teal"><span class="icon">view_column</span></span>
+      <div class="flex-1 min-w-0">
+        <h2 class="!text-lg">{{ noun() }} columns</h2>
+        <p class="text-xs text-ink-3">Extra columns for information the Excel sheet doesn't have yet</p>
+      </div>
+      <button class="btn btn-ghost btn-sm !px-1.5" (click)="close()" aria-label="Close"><span class="icon">close</span></button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto px-6 py-5">
+      @if (error()) {
+        <div class="alert error mb-4" role="alert"><span class="icon">error</span>{{ error() }}</div>
+      }
+
+      <ul class="divide-y divide-line rounded-xl border border-line">
+        @for (f of mine(); track f.id) {
+          <li class="flex items-center gap-3 px-4 py-3">
+            @if (editingId() === f.id) {
+              <input class="input flex-1" [value]="editLabel()" (input)="editLabel.set($any($event.target).value)"
+                     (keydown.enter)="rename(f)" (keydown.escape)="$event.preventDefault(); editingId.set(null)"
+                     aria-label="Column name" />
+              <button class="btn btn-primary btn-sm" (click)="rename(f)" [disabled]="busy()">Save</button>
+              <button class="btn btn-ghost btn-sm" (click)="editingId.set(null)">Cancel</button>
+            } @else {
+              <div class="flex-1 min-w-0">
+                <div class="font-medium truncate">{{ f.label }}</div>
+                <div class="text-xs text-ink-3">{{ typeLabel(f.type) }}</div>
+              </div>
+              <button class="btn btn-ghost btn-sm" (click)="startRename(f)" aria-label="Rename"><span class="icon">edit</span></button>
+              <button class="btn btn-ghost btn-sm !text-critical-ink hover:!bg-critical-soft" (click)="removing.set(f)" aria-label="Delete">
+                <span class="icon">delete</span>
+              </button>
+            }
+          </li>
+        } @empty {
+          <li class="px-4 py-6 text-center text-ink-3">No extra columns yet.</li>
+        }
+      </ul>
+
+      <form class="mt-5" (submit)="$event.preventDefault(); add()">
+        <div class="text-xs font-semibold uppercase tracking-wide text-ink-3 mb-2">Add a column</div>
+        <div class="flex flex-wrap gap-2">
+          <input class="input flex-1 min-w-48" placeholder="Column name, e.g. Site Engineer" maxlength="40"
+                 [value]="newLabel()" (input)="newLabel.set($any($event.target).value)" aria-label="New column name" />
+          <select class="input" [value]="newType()" (change)="newType.set($any($event.target).value)" aria-label="Type">
+            @for (t of types; track t.value) { <option [value]="t.value">{{ t.label }}</option> }
+          </select>
+          <button type="submit" class="btn btn-primary" [disabled]="busy()"><span class="icon">add</span>Add</button>
+        </div>
+      </form>
+
+      <p class="mt-4 flex gap-2 text-[13px] text-ink-2">
+        <span class="icon !text-lg text-tile-blue">info</span>
+        <span>To fill a column from Excel, add a column with the <b class="text-ink">same name</b> to the sheet
+          (for example <b class="text-ink">SITE ENGINEER</b>). It's imported on the next upload and included in exports.</span>
+      </p>
+    </div>
+
+    <div class="flex justify-end px-6 py-4 border-t border-line bg-surface-2 rounded-b-2xl">
+      <button class="btn btn-primary" (click)="close()">Done</button>
+    </div>
+  </div>
+</dialog>
+
+@if (removing(); as f) {
+  <app-confirm-dialog [title]="'Delete the column ' + f.label + '?'" [busy]="busy()" (confirmed)="remove()" (cancelled)="removing.set(null)">
+    The column and every value typed into it are removed from all {{ noun().toLowerCase() }}. This can't be undone.
+  </app-confirm-dialog>
+}

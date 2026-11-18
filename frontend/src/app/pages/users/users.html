@@ -1,0 +1,109 @@
+<div class="max-w-[1100px] mx-auto px-4 py-5 lg:px-8 lg:py-7">
+  <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+    <div>
+      <h1>Users</h1>
+      <p class="mt-1 text-ink-2">Admins can upload Excel files and manage users. Viewers can only see data.</p>
+    </div>
+    @if (!showForm()) {
+      <button class="btn btn-primary" (click)="showForm.set(true); notice.set('')"><span class="icon">add</span>Add user</button>
+    }
+  </div>
+
+  @if (notice()) {
+    <div class="alert success mb-4"><span class="icon">check_circle</span>{{ notice() }}</div>
+  }
+  @if (error()) {
+    <div class="alert error mb-4"><span class="icon">error</span>{{ error() }}</div>
+  }
+
+  @if (showForm()) {
+    <form class="card p-5 mb-4" (ngSubmit)="create()">
+      <h2>New user</h2>
+      <div class="grid gap-4 mt-4 sm:grid-cols-2">
+        <div class="flex flex-col gap-1.5">
+          <label class="label" for="fullName">Full name</label>
+          <input id="fullName" name="fullName" class="input" [(ngModel)]="fullName" placeholder="Sagar Gaikwad" />
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="label" for="newUsername">Username</label>
+          <input id="newUsername" name="username" class="input" [(ngModel)]="username" placeholder="sagar" autocomplete="off" />
+          <span class="text-xs text-ink-3">At least 3 characters: letters, numbers, dot, dash</span>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="label" for="newPassword">Password</label>
+          <input id="newPassword" name="password" type="password" class="input" [(ngModel)]="password" autocomplete="new-password" />
+          <span class="text-xs text-ink-3">At least 8 characters</span>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="label" for="role">Role</label>
+          <select id="role" name="role" class="input" [(ngModel)]="role">
+            <option value="viewer">Viewer (can only look)</option>
+            <option value="admin">Admin (can upload and manage users)</option>
+          </select>
+        </div>
+      </div>
+      <div class="flex gap-2 mt-5">
+        <button type="submit" class="btn btn-primary" [disabled]="!formValid() || saving()">
+          {{ saving() ? 'Creating…' : 'Create user' }}
+        </button>
+        <button type="button" class="btn" (click)="showForm.set(false)">Cancel</button>
+      </div>
+    </form>
+  }
+
+  <div class="card overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Role</th>
+            <th>Status</th>
+            <th class="right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          @if (loading()) {
+            <tr><td colspan="4" class="!py-10"><div class="flex items-center justify-center gap-3 text-ink-3">
+              <span class="spinner !size-5 text-accent"></span>Loading users…</div></td></tr>
+          }
+          @for (u of users(); track u.id) {
+            <tr>
+              <td>
+                <div class="font-medium">{{ u.full_name }} @if (isMe(u)) { <span class="text-ink-3 font-normal">(you)</span> }</div>
+                <div class="text-xs text-ink-3 mt-0.5">{{ u.username }}</div>
+              </td>
+              <td class="capitalize">{{ u.role }}</td>
+              <td><span class="chip" [class.good]="u.is_active">{{ u.is_active ? 'Active' : 'Deactivated' }}</span></td>
+              <td>
+                <div class="flex flex-wrap justify-end gap-1.5">
+                  @if (resetFor() === u.id) {
+                    <input type="password" class="input !h-[30px] w-44" placeholder="New password (8+ chars)"
+                           [(ngModel)]="newPassword" aria-label="New password" autocomplete="new-password" />
+                    <button class="btn btn-primary btn-sm" [disabled]="newPassword().length < 8"
+                            (click)="update(u, { password: newPassword() }, 'Password changed for ' + u.full_name + '.')">Save</button>
+                    <button class="btn btn-ghost btn-sm" (click)="resetFor.set(null)">Cancel</button>
+                  } @else {
+                    <button class="btn btn-sm" (click)="resetFor.set(u.id); newPassword.set('')">
+                      <span class="icon">key</span>Password
+                    </button>
+                    @if (!isMe(u)) {
+                      <button class="btn btn-sm"
+                              (click)="update(u, { role: u.role === 'admin' ? 'viewer' : 'admin' }, u.full_name + ' is now ' + (u.role === 'admin' ? 'a viewer' : 'an admin') + '.')">
+                        {{ u.role === 'admin' ? 'Make viewer' : 'Make admin' }}
+                      </button>
+                      <button class="btn btn-sm"
+                              (click)="update(u, { is_active: !u.is_active }, u.full_name + (u.is_active ? ' can no longer log in.' : ' can log in again.'))">
+                        {{ u.is_active ? 'Deactivate' : 'Activate' }}
+                      </button>
+                    }
+                  }
+                </div>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

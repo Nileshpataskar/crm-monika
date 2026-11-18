@@ -1,0 +1,82 @@
+<div class="min-h-dvh grid lg:grid-cols-[1fr_1.1fr]">
+  <!-- Brand panel (large screens) -->
+  <section class="hidden lg:flex flex-col justify-between p-12 bg-sidebar text-sidebar-ink">
+    <div class="flex items-center gap-3">
+      <div class="grid place-items-center size-10 rounded-lg bg-accent text-white font-bold">SE</div>
+      <div class="leading-tight">
+        <div class="text-white font-semibold text-base">Siddhivinayak Enterprises</div>
+        <div class="text-xs text-white/50">Chiller &amp; AC service</div>
+      </div>
+    </div>
+
+    <div class="max-w-md">
+      <h1 class="text-white text-3xl leading-tight">Every PO, invoice and payment in one place.</h1>
+      <ul class="mt-8 space-y-4 text-white/75">
+        <li class="flex gap-3">
+          <span class="icon text-accent-soft">upload_file</span>
+          Upload your existing Excel sheets. No retyping.
+        </li>
+        <li class="flex gap-3">
+          <span class="icon text-accent-soft">schedule</span>
+          See which invoices are unpaid and for how long.
+        </li>
+        <li class="flex gap-3">
+          <span class="icon text-accent-soft">request_quote</span>
+          Track quotations until the PO arrives.
+        </li>
+      </ul>
+    </div>
+
+    <p class="text-xs text-white/40">Admin portal · authorised staff only</p>
+  </section>
+
+  <!-- Form -->
+  <section class="relative flex items-center justify-center p-6">
+    <div class="absolute top-5 right-5"><app-theme-toggle /></div>
+    <form class="w-full max-w-sm" (ngSubmit)="submit()">
+      <div class="lg:hidden flex items-center gap-3 mb-10">
+        <div class="grid place-items-center size-10 rounded-lg bg-accent text-white font-bold">SE</div>
+        <div class="font-semibold">Siddhivinayak Enterprises</div>
+      </div>
+
+      <h1>Sign in</h1>
+      <p class="mt-1 text-ink-2">Use the account your administrator gave you.</p>
+
+      @if (error()) {
+        <div class="alert error mt-6" role="alert">
+          <span class="icon">error</span>
+          {{ error() }}
+        </div>
+      }
+
+      <div class="mt-6 space-y-4">
+        <div class="flex flex-col gap-1.5">
+          <label class="label" for="username">Username</label>
+          <div class="relative">
+            <span class="icon absolute left-2.5 top-2 text-ink-3 !text-lg">person</span>
+            <input id="username" name="username" class="input w-full h-10 pl-9" autocomplete="username"
+                   [(ngModel)]="username" autofocus />
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-1.5">
+          <label class="label" for="password">Password</label>
+          <div class="relative">
+            <span class="icon absolute left-2.5 top-2 text-ink-3 !text-lg">lock</span>
+            <input id="password" name="password" class="input w-full h-10 px-9" autocomplete="current-password"
+                   [type]="showPassword() ? 'text' : 'password'" [(ngModel)]="password" />
+            <button type="button" class="absolute right-2 top-2 text-ink-3 hover:text-ink"
+                    (click)="showPassword.set(!showPassword())"
+                    [attr.aria-label]="showPassword() ? 'Hide password' : 'Show password'">
+              <span class="icon !text-lg">{{ showPassword() ? 'visibility_off' : 'visibility' }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary w-full h-10 mt-6" [disabled]="loading()">
+        @if (loading()) { <span class="spinner"></span> Signing in… } @else { Sign in }
+      </button>
+    </form>
+  </section>
+</div>

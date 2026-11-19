@@ -4,7 +4,7 @@ import { CustomField, Entity, FieldType } from './models';
 export interface FormField {
   key: string;
   label: string;
-  type: FieldType | 'textarea';
+  type: FieldType | 'textarea' | 'choice'; // choice: pick from a list (suggestions), or type a new one
   required?: boolean;
   /** Words shown for yes/no fields, matching the client's Excel dropdowns. Default: Yes / No. */
   yesNo?: [string, string];
@@ -70,7 +70,7 @@ const QUOTATION_SECTIONS: FormSection[] = [
       { key: 'work_title', label: 'Work title', type: 'textarea', required: true, wide: true },
       { key: 'quote_number', label: 'Quote number', type: 'text' },
       { key: 'work_date', label: 'Work date', type: 'date' },
-      { key: 'work_location', label: 'Work location', type: 'text', suggest: true },
+      { key: 'work_location', label: 'Work location', type: 'choice', suggest: true, hint: 'Manage the list with the Locations button' },
       { key: 'work_type', label: 'Work type', type: 'text', suggest: true },
       { key: 'indentor', label: 'Indentor', type: 'text', suggest: true },
       { key: 'total_amount', label: 'Quoted amount', type: 'number' },

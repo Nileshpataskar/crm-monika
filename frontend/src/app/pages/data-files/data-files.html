@@ -2,17 +2,14 @@
   <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
     <div>
       <h1>Data files</h1>
-      <p class="mt-1 text-ink-2">Which months are loaded and which Excel files they came from.</p>
+      <p class="mt-1 text-ink-2">Which months are loaded for each firm, and which Excel files they came from.</p>
     </div>
-    <button class="btn btn-primary" (click)="downloadBackup()" [disabled]="backingUp()">
-      @if (backingUp()) { <span class="spinner"></span> Preparing… } @else { <span class="icon">download</span>Download full backup }
-    </button>
   </div>
 
   <div class="alert mb-6 bg-tile-blue/8 text-ink-2">
     <span class="icon text-tile-blue">info</span>
-    <span>The backup is one Excel file with every order and quotation (one sheet per month, in your usual columns).
-      To restore it, upload it like any other Excel file.</span>
+    <span>Each firm's backup is one Excel file with all its orders and quotations (one sheet per month, in your usual columns).
+      To restore it, upload it for the same firm like any other Excel file.</span>
   </div>
 
   @if (notice()) {
@@ -29,55 +26,62 @@
       }
     </div>
   } @else {
-    <!-- Months -->
-    <h2 class="section-title">Months loaded</h2>
-    @if (!months().length && !years().length) {
-      <div class="card p-10 text-center text-ink-2">
-        No data yet.
-        @if (auth.isAdmin()) {
-          <button class="text-accent font-medium hover:underline" (click)="upload.open()">Upload an Excel file</button>
-        }
+    <!-- Months, per firm -->
+    @for (group of byFirm(); track group.firm.id) {
+      <div class="flex flex-wrap items-center justify-between gap-3 mb-3" [class.mt-8]="!$first">
+        <h2 class="section-title !mb-0 flex items-center gap-2"><span class="icon text-accent">apartment</span>{{ group.firm.name }}</h2>
+        <button class="btn btn-sm" (click)="downloadBackup(group.firm.id)" [disabled]="backingUp() !== null">
+          @if (backingUp() === group.firm.id) { <span class="spinner"></span> Preparing… } @else { <span class="icon">download</span>Download backup }
+        </button>
       </div>
-    }
-    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      @for (p of monthsThenYears(); track p.type + p.period) {
-        <div class="card p-5 flex flex-col">
-          <div class="flex items-start gap-4">
-            <span class="icon-tile" [class]="p.type === 'orders' ? 'green' : 'violet'">
-              <span class="icon">{{ p.type === 'orders' ? 'calendar_month' : 'request_quote' }}</span>
-            </span>
-            <div class="min-w-0 flex-1">
-              <div class="text-lg font-bold leading-tight">{{ p.type === 'orders' ? p.label : 'Quotations ' + p.label }}</div>
-              <div class="text-ink-2">
-                <b class="tabular-nums">{{ p.rows }}</b> {{ rowsWord(p.type, p.rows) }}
-              </div>
-              @if (p.manual) {
-                <div class="mt-1 text-xs text-ink-3">+ {{ p.manual }} entered in the app</div>
-              }
-              @if (p.hidden) {
-                <div class="mt-1 text-xs text-ink-3">
-                  + {{ p.hidden }} shown under a later month (newer status)
+      @if (!group.periods.length) {
+        <div class="card p-8 text-center text-ink-2">
+          No data yet for {{ group.firm.name }}.
+          @if (auth.isAdmin()) {
+            <button class="text-accent font-medium hover:underline" (click)="upload.open(group.firm.id)">Upload an Excel file</button>
+          }
+        </div>
+      }
+      <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        @for (p of group.periods; track p.type + p.period) {
+          <div class="card p-5 flex flex-col">
+            <div class="flex items-start gap-4">
+              <span class="icon-tile" [class]="p.type === 'orders' ? 'green' : 'violet'">
+                <span class="icon">{{ p.type === 'orders' ? 'calendar_month' : 'request_quote' }}</span>
+              </span>
+              <div class="min-w-0 flex-1">
+                <div class="text-lg font-bold leading-tight">{{ p.type === 'orders' ? p.label : 'Quotations ' + p.label }}</div>
+                <div class="text-ink-2">
+                  <b class="tabular-nums">{{ p.rows }}</b> {{ rowsWord(p.type, p.rows) }}
                 </div>
+                @if (p.manual) {
+                  <div class="mt-1 text-xs text-ink-3">+ {{ p.manual }} entered in the app</div>
+                }
+                @if (p.hidden) {
+                  <div class="mt-1 text-xs text-ink-3">
+                    + {{ p.hidden }} shown under a later month (newer status)
+                  </div>
+                }
+              </div>
+            </div>
+            <div class="mt-4 flex items-center gap-2 text-xs text-ink-3 min-w-0">
+              <span class="icon !text-base">description</span>
+              <span class="truncate">{{ p.upload_id ? p.filename : 'No Excel file, only rows entered in the app' }}</span>
+            </div>
+            <div class="mt-4 pt-3 border-t border-line flex flex-wrap gap-2">
+              @if (p.upload_id && hasFile(p.upload_id)) {
+                <button class="btn btn-sm" (click)="view(p.upload_id, p.filename!)"><span class="icon">table_view</span>View file</button>
+              }
+              @if (auth.isAdmin() && p.rows + p.hidden > 0) {
+                <button class="btn btn-sm btn-ghost ml-auto !text-critical-ink hover:!bg-critical-soft" (click)="askDeletePeriod(p)">
+                  <span class="icon">delete</span>Delete {{ p.type === 'orders' ? 'month' : 'year' }}
+                </button>
               }
             </div>
           </div>
-          <div class="mt-4 flex items-center gap-2 text-xs text-ink-3 min-w-0">
-            <span class="icon !text-base">description</span>
-            <span class="truncate">{{ p.upload_id ? p.filename : 'No Excel file, only rows entered in the app' }}</span>
-          </div>
-          <div class="mt-4 pt-3 border-t border-line flex flex-wrap gap-2">
-            @if (p.upload_id && hasFile(p.upload_id)) {
-              <button class="btn btn-sm" (click)="view(p.upload_id, p.filename!)"><span class="icon">table_view</span>View file</button>
-            }
-            @if (auth.isAdmin() && p.rows + p.hidden > 0) {
-              <button class="btn btn-sm btn-ghost ml-auto !text-critical-ink hover:!bg-critical-soft" (click)="askDeletePeriod(p)">
-                <span class="icon">delete</span>Delete {{ p.type === 'orders' ? 'month' : 'year' }}
-              </button>
-            }
-          </div>
-        </div>
-      }
-    </div>
+        }
+      </div>
+    }
 
     <!-- Files -->
     <h2 class="section-title mt-8">Uploaded files</h2>
@@ -87,6 +91,7 @@
           <thead>
             <tr>
               <th>File</th>
+              <th>Firm</th>
               <th>Data it provides</th>
               <th class="right">Actions</th>
             </tr>
@@ -103,6 +108,7 @@
                     </div>
                   </div>
                 </td>
+                <td class="whitespace-nowrap">{{ firms.name(u.firm_id) }}</td>
                 <td>
                   <div class="flex flex-wrap gap-1.5">
                     @for (p of u.periods; track p.type + p.period) {
@@ -134,7 +140,7 @@
                 </td>
               </tr>
             } @empty {
-              <tr><td colspan="3" class="!py-10 text-center text-ink-3">No files uploaded yet.</td></tr>
+              <tr><td colspan="4" class="!py-10 text-center text-ink-3">No files uploaded yet.</td></tr>
             }
           </tbody>
         </table>

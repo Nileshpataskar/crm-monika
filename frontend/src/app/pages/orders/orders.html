@@ -1,8 +1,8 @@
 <div class="max-w-[1400px] mx-auto px-4 py-5 lg:px-8 lg:py-7">
   <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
     <div>
-      <h1>Orders</h1>
-      <p class="mt-1 text-ink-2">Every PO line, from the Excel sheets and typed in here. Click a row to see its full status.</p>
+      <app-firm-heading [firm]="firmId()" title="Orders" />
+      <p class="mt-1 text-ink-2">Every PO line of {{ firmName() }}, from the Excel sheets and typed in here. Click a row to see its full status.</p>
     </div>
     <div class="flex flex-wrap gap-2">
       <button class="btn" (click)="exportExcel()" [disabled]="exporting()" title="Download all orders as Excel (backup)">
@@ -10,10 +10,20 @@
       </button>
       @if (auth.isAdmin()) {
         <button class="btn" (click)="showColumns.set(true)"><span class="icon">view_column</span>Columns</button>
-        <button class="btn btn-primary" (click)="editing.set('new')"><span class="icon">add</span>New order</button>
+        @if (!archived()) {
+          <button class="btn btn-primary" (click)="editing.set('new')"><span class="icon">add</span>New order</button>
+        }
       }
     </div>
   </div>
+
+  @if (archived()) {
+    <div class="alert warn mb-6">
+      <span class="icon">inventory</span>
+      <span>{{ firmName() }} is archived: its data is kept for reference, but it isn't in the menu or the dashboard
+        and takes no new entries or uploads. Restore it on the <a routerLink="/firms" class="font-semibold underline">Firms</a> page.</span>
+    </div>
+  }
 
   <!-- Summary tiles: click one to filter the table -->
   <div class="grid gap-4 grid-cols-2 xl:grid-cols-4 mb-6">
@@ -37,7 +47,7 @@
     <div class="flex flex-wrap items-center gap-2.5 p-4 border-b border-line">
       <div class="relative">
         <span class="icon absolute left-2.5 top-2 text-ink-3 !text-lg pointer-events-none">search</span>
-        <input class="input w-72 max-w-full pl-9" placeholder="Search description, PO, invoice…"
+        <input class="input w-72 max-w-full pl-9" placeholder="Search description, PO, vendor code, invoice…"
                [(ngModel)]="search" aria-label="Search orders" />
       </div>
       <select class="input" [(ngModel)]="customer" aria-label="Customer">
@@ -46,12 +56,18 @@
           <option [value]="c">{{ c }}</option>
         }
       </select>
+      <select class="input" [(ngModel)]="vendor" aria-label="Vendor code">
+        <option value="">All vendor codes</option>
+        @for (v of vendors(); track v) {
+          <option [value]="v">Vendor code {{ v }}</option>
+        }
+      </select>
       <select class="input" [(ngModel)]="status" aria-label="Status">
         @for (opt of statusOptions; track opt.value) {
           <option [value]="opt.value">{{ opt.label }}</option>
         }
       </select>
-      @if (search() || customer() || status() !== 'all') {
+      @if (search() || customer() || vendor() || status() !== 'all') {
         <button class="btn btn-ghost btn-sm" (click)="clearFilters()">Clear filters</button>
       }
     </div>
@@ -65,56 +81,73 @@
         <table class="data-table">
           <thead>
             <tr>
-              <th class="cursor-pointer hover:text-ink" (click)="sortBy('order_date')">Order date {{ sortIcon('order_date') }}</th>
-              <th>Customer / PO</th>
-              <th>Description</th>
-              <th class="cursor-pointer hover:text-ink" (click)="sortBy('invoice_date')">Invoice {{ sortIcon('invoice_date') }}</th>
-              <th class="right cursor-pointer hover:text-ink" (click)="sortBy('total_amount')">Amount {{ sortIcon('total_amount') }}</th>
-              @for (f of orderFields(); track f.id) {
-                <th>{{ f.label }}</th>
+              @for (c of columns(); track c.key) {
+                @switch (c.key) {
+                  @case ('order_date') {
+                    <th class="cursor-pointer hover:text-ink" (click)="sortBy('order_date')">{{ c.label }} {{ sortIcon('order_date') }}</th>
+                  }
+                  @case ('invoice') {
+                    <th class="cursor-pointer hover:text-ink" (click)="sortBy('invoice_date')">{{ c.label }} {{ sortIcon('invoice_date') }}</th>
+                  }
+                  @case ('total_amount') {
+                    <th class="right cursor-pointer hover:text-ink" (click)="sortBy('total_amount')">{{ c.label }} {{ sortIcon('total_amount') }}</th>
+                  }
+                  @default { <th>{{ c.label }}</th> }
+                }
               }
-              <th>Status</th>
             </tr>
           </thead>
           <tbody>
             @for (o of filtered(); track o.id) {
               <tr class="cursor-pointer hover:[&>td]:bg-surface-2" (click)="selected.set(o)">
-                <td class="whitespace-nowrap">{{ (o.order_date | date: 'd MMM y') ?? '—' }}</td>
-                <td class="whitespace-nowrap">
-                  <div class="font-medium">{{ o.customer ?? '—' }}</div>
-                  <div class="text-xs text-ink-3 mt-0.5">{{ o.po_number ? 'PO ' + o.po_number : 'No PO yet' }}</div>
-                </td>
-                <td class="min-w-[260px]">
-                  <div class="font-medium line-clamp-2">{{ o.description }}</div>
-                  <div class="text-xs text-ink-3 mt-0.5">
-                    {{ meta(o) }}
-                  </div>
-                </td>
-                <td class="whitespace-nowrap">
-                  @if (o.invoice_number) {
-                    <div>#{{ o.invoice_number }}</div>
-                    <div class="text-xs text-ink-3 mt-0.5">{{ o.invoice_date | date: 'd MMM y' }}</div>
+                @for (c of columns(); track c.key) {
+                  @if (c.custom; as f) {
+                    <td class="whitespace-nowrap max-w-[220px] truncate">{{ formatExtra(f, o.extra?.[f.key]) }}</td>
                   } @else {
-                    <span class="text-ink-3">—</span>
-                  }
-                </td>
-                <td class="right tabular-nums font-medium whitespace-nowrap">{{ o.total_amount | inr }}</td>
-                @for (f of orderFields(); track f.id) {
-                  <td class="whitespace-nowrap max-w-[220px] truncate">{{ formatExtra(f, o.extra?.[f.key]) }}</td>
-                }
-                <td>
-                  <div class="flex flex-col items-start gap-1">
-                    @let pay = paymentStatus(o);
-                    <span class="chip" [class]="pay.tone">{{ pay.label }}</span>
-                    @if (grnStatus(o); as grn) {
-                      <span class="chip" [class]="grn.tone">{{ grn.label }}</span>
+                    @switch (c.key) {
+                      @case ('order_date') { <td class="whitespace-nowrap">{{ (o.order_date | date: 'd MMM y') ?? '—' }}</td> }
+                      @case ('customer') { <td class="whitespace-nowrap font-medium">{{ o.customer ?? '—' }}</td> }
+                      @case ('vendor_code') { <td class="whitespace-nowrap tabular-nums">{{ o.vendor_code ?? '—' }}</td> }
+                      @case ('po_number') {
+                        <td class="whitespace-nowrap tabular-nums">
+                          @if (o.po_number) { {{ o.po_number }} } @else { <span class="text-ink-3">No PO yet</span> }
+                        </td>
+                      }
+                      @case ('description') {
+                        <td class="min-w-[260px]">
+                          <div class="font-medium line-clamp-2">{{ o.description }}</div>
+                          <div class="text-xs text-ink-3 mt-0.5">{{ meta(o) }}</div>
+                        </td>
+                      }
+                      @case ('invoice') {
+                        <td class="whitespace-nowrap">
+                          @if (o.invoice_number) {
+                            <div>#{{ o.invoice_number }}</div>
+                            <div class="text-xs text-ink-3 mt-0.5">{{ o.invoice_date | date: 'd MMM y' }}</div>
+                          } @else {
+                            <span class="text-ink-3">—</span>
+                          }
+                        </td>
+                      }
+                      @case ('total_amount') { <td class="right tabular-nums font-medium whitespace-nowrap">{{ o.total_amount | inr }}</td> }
+                      @case ('status') {
+                        <td>
+                          <div class="flex flex-col items-start gap-1">
+                            @let pay = paymentStatus(o);
+                            <span class="chip" [class]="pay.tone">{{ pay.label }}</span>
+                            @if (grnStatus(o); as grn) {
+                              <span class="chip" [class]="grn.tone">{{ grn.label }}</span>
+                            }
+                          </div>
+                        </td>
+                      }
                     }
-                  </div>
-                </td>
+                  }
+                }
               </tr>
             } @empty {
               <tr>
-                <td [attr.colspan]="6 + orderFields().length" class="!py-12 text-center text-ink-2">
+                <td [attr.colspan]="columns().length" class="!py-12 text-center text-ink-2">
                   @if (orders().length) { No orders match these filters. } @else { No orders yet. Upload a PO summary sheet. }
                 </td>
               </tr>
@@ -138,7 +171,7 @@
     <div class="flex items-start gap-3 p-5 border-b border-line">
       <div class="flex-1 min-w-0">
         <div class="text-xs text-ink-3">
-          {{ o.customer }} ·
+          {{ firmName() }} · {{ o.customer }} ·
           @if (o.upload_id) { {{ o.sheet_name }}, Excel row {{ o.excel_row }} } @else { Entered in the app }
         </div>
         <h2 class="mt-1 !text-base leading-snug">{{ o.description }}</h2>
@@ -203,10 +236,10 @@
 }
 
 @if (editing(); as e) {
-  <app-record-form entity="orders" [row]="e === 'new' ? null : e" [customFields]="fields()" [suggestions]="suggestions()"
+  <app-record-form entity="orders" [firm]="firmId()" [row]="e === 'new' ? null : e" [customFields]="fields()" [suggestions]="suggestions()"
                    (saved)="onSaved()" (deleted)="onDeleted()" (closed)="editing.set(null)" />
 }
 
 @if (showColumns()) {
-  <app-columns-dialog entity="orders" [fields]="fields()" (changed)="onSaved()" (closed)="showColumns.set(false)" />
+  <app-columns-dialog entity="orders" [fields]="fields()" [order]="columnOrder()" (changed)="onSaved()" (closed)="showColumns.set(false)" />
 }

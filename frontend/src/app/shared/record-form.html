@@ -46,6 +46,21 @@
                     <textarea [id]="'f-' + f.key" rows="2" class="input !h-auto py-2 resize-y"
                               [value]="values()[f.key] ?? ''" (input)="set(f.key, $any($event.target).value)"></textarea>
                   }
+                  @case ('choice') {
+                    @if (typingNew()[f.key]) {
+                      <div class="flex gap-2">
+                        <input [id]="'f-' + f.key" class="input flex-1" placeholder="Type the new name" maxlength="60" autocomplete="off"
+                               [value]="values()[f.key] ?? ''" (input)="set(f.key, $any($event.target).value)" />
+                        <button type="button" class="btn btn-ghost btn-sm" (click)="typingNew.set({}); set(f.key, initialValue(f.key))">Back to list</button>
+                      </div>
+                    } @else {
+                      <select [id]="'f-' + f.key" class="input" [value]="values()[f.key] ?? ''" (change)="pickChoice(f, $any($event.target).value)">
+                        <option value="">—</option>
+                        @for (c of choices(f); track c) { <option [value]="c" [selected]="c === values()[f.key]">{{ c }}</option> }
+                        <option value="__new__">＋ New {{ f.label.toLowerCase() }}…</option>
+                      </select>
+                    }
+                  }
                   @case ('yesno') {
                     <select [id]="'f-' + f.key" class="input" [value]="values()[f.key] ?? ''" (change)="set(f.key, $any($event.target).value)">
                       <option value="">—</option>

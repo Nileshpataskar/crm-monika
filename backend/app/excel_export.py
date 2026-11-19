@@ -40,6 +40,13 @@ BOOL_WORDS = {
 }
 MONEY_FIELDS = {"amount", "cgst", "sgst", "total_amount", "po_amount"}
 
+# Which Excel column each table column of the app stands for, so a custom column placed after
+# "Invoice" in the app is also placed after INVOICE NUMBER in the export.
+TABLE_TO_EXCEL = {
+    "orders": {"invoice": "invoice_number", "status": "payment_received"},
+    "quotations": {"po_number": "po_amount", "status": "payment_received"},
+}
+
 HEADER_FILL = PatternFill("solid", fgColor="23824F")
 HEADER_FONT = Font(bold=True, color="FFFFFF")
 
@@ -69,13 +76,38 @@ def custom_cell(field: CustomField, value):
     return value
 
 
-def add_sheet(wb: Workbook, entity: str, title: str, rows: list, fields: list[CustomField]):
+def export_columns(entity: str, fields: list[CustomField], order: list[str]) -> list:
+    """The standard Excel columns with each custom column (a CustomField) slotted in after the
+    standard column it follows in the app's column order."""
+    standard = ORDER_EXPORT if entity == "orders" else QUOTATION_EXPORT
+    by_key = {f"custom:{f.id}": f for f in fields}
+    after = {}  # excel field (None = very first) -> custom columns that follow it
+    anchor = None
+    for key in order:
+        if key in by_key:
+            after.setdefault(anchor, []).append(by_key.pop(key))
+        else:
+            anchor = TABLE_TO_EXCEL[entity].get(key, key)
+    after.setdefault("payment_received", []).extend(by_key.values())  # not in the order: at the end
+
+    columns = list(after.get(None, []))
+    for heading, field in standard:
+        columns.append((heading, field))
+        columns += after.get(field, [])
+    return columns
+
+
+def add_sheet(wb: Workbook, entity: str, title: str, rows: list, fields: list[CustomField], order: list[str]):
     ws = wb.create_sheet(title)
-    columns = (ORDER_EXPORT if entity == "orders" else QUOTATION_EXPORT)
-    ws.append([heading for heading, _ in columns] + [f.label.upper() for f in fields])
+    columns = export_columns(entity, fields, order)
+    ws.append([c.label.upper() if isinstance(c, CustomField) else c[0] for c in columns])
     for number, row in enumerate(rows, 1):
-        values = [number if field is None else cell_value(entity, field, getattr(row, field)) for _, field in columns]
-        values += [custom_cell(f, (row.extra or {}).get(f.key)) for f in fields]
+        values = []
+        for c in columns:
+            if isinstance(c, CustomField):
+                values.append(custom_cell(c, (row.extra or {}).get(c.key)))
+            else:
+                values.append(number if c[1] is None else cell_value(entity, c[1], getattr(row, c[1])))
         ws.append(values)
 
     # Formatting: green bold header, frozen header row, filter buttons, dates and rupees.
@@ -84,7 +116,7 @@ def add_sheet(wb: Workbook, entity: str, title: str, rows: list, fields: list[Cu
         cell.alignment = Alignment(vertical="center", wrap_text=True)
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
-    all_fields = [field for _, field in columns] + [None] * len(fields)
+    all_fields = [None if isinstance(c, CustomField) else c[1] for c in columns]
     for i, field in enumerate(all_fields, 1):
         letter = get_column_letter(i)
         longest = max((len(str(c.value)) for c in ws[letter] if c.value is not None), default=8)
@@ -96,12 +128,13 @@ def add_sheet(wb: Workbook, entity: str, title: str, rows: list, fields: list[Cu
                 c.number_format = "#,##0.00"
 
 
-def build_workbook(sheets: list[tuple[str, str | None, list]], fields: dict[str, list[CustomField]]) -> bytes:
-    """sheets: (entity, period, rows) in the order they should appear."""
+def build_workbook(sheets: list[tuple[str, str | None, list]], fields: dict[str, list[CustomField]],
+                   orders: dict[str, list[str]]) -> bytes:
+    """sheets: (entity, period, rows) in the order they should appear. orders: column order per entity."""
     wb = Workbook()
     wb.remove(wb.active)
     for entity, period, rows in sheets:
-        add_sheet(wb, entity, sheet_title(entity, period), rows, fields.get(entity, []))
+        add_sheet(wb, entity, sheet_title(entity, period), rows, fields.get(entity, []), orders.get(entity, []))
     if not wb.worksheets:
         wb.create_sheet("No data").append(["Nothing to export yet"])
     out = BytesIO()

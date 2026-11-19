@@ -100,6 +100,7 @@ class SheetResult:
     kind: str | None  # "orders", "quotations", or None when we don't recognise the sheet
     period: str | None = None  # "2026-05" for a monthly PO sheet, "2026-27" for a quotation year sheet
     rows: list[dict] = field(default_factory=list)
+    locations: list[str] = field(default_factory=list)  # quotation sheets: every location block, even empty ones
     warnings: list[str] = field(default_factory=list)  # imported anyway, but worth checking
     errors: list[str] = field(default_factory=list)  # this sheet can't be imported until fixed
 
@@ -377,6 +378,12 @@ def clean_orders(df: pd.DataFrame, warnings: list[str], custom: list[dict] = ())
     return df
 
 
+def location_names(df: pd.DataFrame) -> list[str]:
+    """Every location block in the sheet, including ones with no quotations yet (KOMATSU, KCPTL...)."""
+    names = [to_text(v) for v in df["work_location"]] if "work_location" in df.columns else []
+    return list(dict.fromkeys(n for n in names if n and n.upper() not in ("TOTAL", "GRAND TOTAL")))
+
+
 def clean_quotations(df: pd.DataFrame, warnings: list[str], custom: list[dict] = ()) -> pd.DataFrame:
     df = select_columns(df, QUOTATION_COLUMNS, warnings, list(custom))
     # The location is written once at the top of each block ("MCD 1", "FMD 4", ...),
@@ -422,6 +429,7 @@ def parse_workbook(content: bytes, custom_fields: dict | None = None) -> list[Sh
                     result.errors.append(f"Can't tell which month '{ws.title}' is for. "
                                          "Rename the sheet like 'JUNE - 2026'.")
         elif result.kind == "quotations":
+            result.locations = location_names(df)
             result.rows = records(clean_quotations(df, result.warnings, custom_fields.get("quotations", [])))
             result.period = financial_year(ws.title)
         else:

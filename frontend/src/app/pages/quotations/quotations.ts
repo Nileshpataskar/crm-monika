@@ -1,15 +1,19 @@
-import { Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import { Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute } from '@angular/router';
+import { RouterLink } from '@angular/router';
 import { forkJoin } from 'rxjs';
 import { Api, errorMessage } from '../../core/api';
 import { Auth } from '../../core/auth';
-import { CustomField, Quotation } from '../../core/models';
+import { tableColumns } from '../../core/columns';
+import { Firms } from '../../core/firms';
+import { CustomField, Quotation, WorkLocation } from '../../core/models';
 import { formatExtra } from '../../core/record-fields';
 import { UploadDialog } from '../../core/upload-dialog';
 import { ColumnsDialog } from '../../shared/columns-dialog';
 import { saveResponse } from '../../shared/excel-viewer';
+import { FirmHeading } from '../../shared/firm-heading';
 import { InrPipe } from '../../shared/inr.pipe';
+import { LocationsDialog } from '../../shared/locations-dialog';
 import { RecordForm } from '../../shared/record-form';
 import { quoteStatus, workStatus } from '../../shared/status';
 
@@ -24,30 +28,41 @@ type StatusFilter = keyof typeof STATUS_FILTERS;
 
 @Component({
   selector: 'app-quotations',
-  imports: [FormsModule, InrPipe, RecordForm, ColumnsDialog],
+  imports: [FormsModule, InrPipe, RecordForm, ColumnsDialog, FirmHeading, LocationsDialog, RouterLink],
   templateUrl: './quotations.html',
 })
 export class QuotationsPage {
   private api = inject(Api);
   private upload = inject(UploadDialog);
-  private route = inject(ActivatedRoute);
+  private firms = inject(Firms);
   protected auth = inject(Auth);
   protected formatExtra = formatExtra;
   protected quoteStatus = quoteStatus;
   protected workStatus = workStatus;
 
+  // From the address: /quotations/2?status=open (the router fills these in).
+  readonly firm = input.required<string>();
+  readonly statusParam = input<string | undefined>(undefined, { alias: 'status' });
+  protected firmId = computed(() => Number(this.firm()));
+  protected firmName = computed(() => this.firms.name(this.firmId()));
+  /** Archived firms keep their data for looking at, but take no new entries. */
+  protected archived = computed(() => !!this.firms.get(this.firmId())?.archived_at);
+
   protected quotes = signal<Quotation[]>([]);
   protected fields = signal<CustomField[]>([]);
-  protected quoteFields = computed(() => this.fields().filter((f) => f.entity === 'quotations'));
+  protected columnOrder = signal<string[]>([]);
+  protected columns = computed(() => tableColumns('quotations', this.columnOrder(), this.fields()));
+  protected workLocations = signal<WorkLocation[]>([]);
   /** The add/edit form: 'new', a quotation being edited, or null when closed. */
   protected editing = signal<Quotation | 'new' | null>(null);
   protected showColumns = signal(false);
+  protected showLocations = signal(false);
   protected exporting = signal(false);
 
   protected suggestions = computed(() => {
     const unique = (key: keyof Quotation) =>
       [...new Set(this.quotes().map((q) => q[key]).filter((v): v is string => typeof v === 'string' && !!v))].sort();
-    return { work_location: unique('work_location'), work_type: unique('work_type'), indentor: unique('indentor') };
+    return { work_location: this.locations(), work_type: unique('work_type'), indentor: unique('indentor') };
   });
   protected loading = signal(true);
   protected error = signal('');
@@ -55,11 +70,10 @@ export class QuotationsPage {
   protected search = signal('');
   protected location = signal('');
   // Start from ?status=open etc. when we arrive from a dashboard link.
-  protected status = signal<StatusFilter>(this.statusFromUrl());
+  protected status = signal<StatusFilter>('all');
 
-  protected locations = computed(() =>
-    [...new Set(this.quotes().map((q) => q.work_location).filter((l): l is string => !!l))].sort(),
-  );
+  /** Every location in the list (shared by both firms), for the filter and the form. */
+  protected locations = computed(() => this.workLocations().map((l) => l.name));
 
   protected filtered = computed(() => {
     const q = this.search().trim().toLowerCase();
@@ -98,18 +112,42 @@ export class QuotationsPage {
   });
 
   constructor() {
-    // Load now, and again whenever an Excel import finishes.
+    // Switching firm or following a dashboard link: start from that link's filters.
+    effect(() => {
+      this.firmId();
+      const status = this.statusParam();
+      untracked(() => {
+        this.status.set(status && status in STATUS_FILTERS ? (status as StatusFilter) : 'all');
+        this.search.set('');
+        this.location.set('');
+      });
+    });
+    // Load now, again for another firm, and whenever an Excel import or an edit finishes.
     effect(() => {
       this.upload.version();
-      untracked(() => this.load());
+      const firm = this.firmId();
+      untracked(() => this.load(firm));
     });
   }
 
-  load() {
-    forkJoin({ rows: this.api.quotations(), fields: this.api.fields() }).subscribe({
-      next: ({ rows, fields }) => {
+  private loadedFirm: number | null = null;
+
+  load(firm = this.firmId()) {
+    if (firm !== this.loadedFirm) this.loading.set(true);
+    this.error.set('');
+    forkJoin({
+      rows: this.api.quotations(firm),
+      fields: this.api.fields(),
+      columns: this.api.columns(),
+      locations: this.api.locations(),
+    }).subscribe({
+      next: ({ rows, fields, columns, locations }) => {
+        if (firm !== this.firmId()) return; // the user already moved on to the other firm
         this.quotes.set(rows);
         this.fields.set(fields);
+        this.columnOrder.set(columns.quotations);
+        this.workLocations.set(locations);
+        this.loadedFirm = firm;
         this.loading.set(false);
       },
       error: (err) => {
@@ -131,7 +169,7 @@ export class QuotationsPage {
 
   exportExcel() {
     this.exporting.set(true);
-    this.api.exportExcel('quotations').subscribe({
+    this.api.exportExcel('quotations', this.firmId()).subscribe({
       next: (res) => {
         saveResponse(res, 'Quotations.xlsx');
         this.exporting.set(false);
@@ -147,10 +185,5 @@ export class QuotationsPage {
     this.search.set('');
     this.location.set('');
     this.status.set('all');
-  }
-
-  private statusFromUrl(): StatusFilter {
-    const value = this.route.snapshot.queryParamMap.get('status');
-    return value && value in STATUS_FILTERS ? (value as StatusFilter) : 'all';
   }
 }

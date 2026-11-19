@@ -1,15 +1,18 @@
 import { DatePipe } from '@angular/common';
-import { Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import { Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute } from '@angular/router';
+import { RouterLink } from '@angular/router';
 import { forkJoin } from 'rxjs';
 import { Api, errorMessage } from '../../core/api';
 import { Auth } from '../../core/auth';
+import { tableColumns } from '../../core/columns';
+import { Firms } from '../../core/firms';
 import { CustomField, Order } from '../../core/models';
 import { formatExtra } from '../../core/record-fields';
 import { UploadDialog } from '../../core/upload-dialog';
 import { ColumnsDialog } from '../../shared/columns-dialog';
 import { saveResponse } from '../../shared/excel-viewer';
+import { FirmHeading } from '../../shared/firm-heading';
 import { InrPipe } from '../../shared/inr.pipe';
 import { RecordForm } from '../../shared/record-form';
 import { grnStatus, paymentStatus } from '../../shared/status';
@@ -35,7 +38,7 @@ interface Step {
 
 @Component({
   selector: 'app-orders',
-  imports: [FormsModule, InrPipe, DatePipe, RecordForm, ColumnsDialog],
+  imports: [FormsModule, InrPipe, DatePipe, RecordForm, ColumnsDialog, FirmHeading, RouterLink],
   templateUrl: './orders.html',
   // Esc closes the detail panel, unless a form or dialog is open on top of it (Esc closes that instead).
   host: { '(document:keydown.escape)': 'editing() || showColumns() || selected.set(null)' },
@@ -43,23 +46,35 @@ interface Step {
 export class OrdersPage {
   private api = inject(Api);
   private upload = inject(UploadDialog);
-  private route = inject(ActivatedRoute);
+  private firms = inject(Firms);
   protected auth = inject(Auth);
   protected paymentStatus = paymentStatus;
   protected formatExtra = formatExtra;
   protected grnStatus = grnStatus;
 
+  // From the address: /orders/2?status=unpaid&vendor=67791 (the router fills these in).
+  readonly firm = input.required<string>();
+  readonly statusParam = input<string | undefined>(undefined, { alias: 'status' });
+  readonly vendorParam = input<string | undefined>(undefined, { alias: 'vendor' });
+  protected firmId = computed(() => Number(this.firm()));
+  protected firmName = computed(() => this.firms.name(this.firmId()));
+  /** Archived firms keep their data for looking at, but take no new entries. */
+  protected archived = computed(() => !!this.firms.get(this.firmId())?.archived_at);
+
   protected orders = signal<Order[]>([]);
   protected fields = signal<CustomField[]>([]); // all custom columns (orders and quotations)
   protected orderFields = computed(() => this.fields().filter((f) => f.entity === 'orders'));
+  protected columnOrder = signal<string[]>([]);
+  /** The table's columns, in the order the admin arranged them. */
+  protected columns = computed(() => tableColumns('orders', this.columnOrder(), this.fields()));
   protected loading = signal(true);
   protected error = signal('');
 
   // Filters: plain signals bound to the inputs with [(ngModel)].
   protected search = signal('');
   protected customer = signal('');
-  // Start from ?status=unpaid etc. when we arrive from a dashboard link.
-  protected status = signal<StatusFilter>(this.statusFromUrl());
+  protected vendor = signal('');
+  protected status = signal<StatusFilter>('all');
   protected statusOptions = Object.entries(STATUS_FILTERS).map(([value, f]) => ({ value, label: f.label }));
   protected sortKey = signal<SortKey>('order_date');
   protected sortDesc = signal(true);
@@ -83,6 +98,10 @@ export class OrdersPage {
     [...new Set(this.orders().map((o) => o.customer).filter((c): c is string => !!c))].sort(),
   );
 
+  protected vendors = computed(() =>
+    [...new Set(this.orders().map((o) => o.vendor_code).filter((c): c is string => !!c))].sort(),
+  );
+
   /** computed() re-runs automatically whenever a signal it reads changes, so the table updates as you type. */
   protected filtered = computed(() => {
     const q = this.search().trim().toLowerCase();
@@ -90,10 +109,11 @@ export class OrdersPage {
     const dir = this.sortDesc() ? -1 : 1;
     return this.orders()
       .filter((o) => !this.customer() || o.customer === this.customer())
+      .filter((o) => !this.vendor() || o.vendor_code === this.vendor())
       .filter(STATUS_FILTERS[this.status()].test)
       .filter((o) =>
         !q ||
-        [o.description, o.po_number, o.invoice_number, o.indentor, o.category, o.quotation_number, o.dc_number,
+        [o.description, o.po_number, o.vendor_code, o.invoice_number, o.indentor, o.category, o.quotation_number, o.dc_number,
          ...Object.values(o.extra ?? {}).map((v) => (v === null ? null : String(v)))]
           .some((v) => v?.toLowerCase().includes(q)),
       )
@@ -146,18 +166,39 @@ export class OrdersPage {
   });
 
   constructor() {
-    // Load now, and again whenever an Excel import finishes.
+    // Switching firm or following a dashboard link: start from that link's filters.
+    effect(() => {
+      this.firmId();
+      const status = this.statusParam();
+      const vendor = this.vendorParam() ?? '';
+      untracked(() => {
+        this.status.set(status && status in STATUS_FILTERS ? (status as StatusFilter) : 'all');
+        this.vendor.set(vendor);
+        this.customer.set('');
+        this.search.set('');
+        this.selected.set(null);
+      });
+    });
+    // Load now, again for another firm, and whenever an Excel import or an edit finishes.
     effect(() => {
       this.upload.version();
-      untracked(() => this.load());
+      const firm = this.firmId();
+      untracked(() => this.load(firm));
     });
   }
 
-  load() {
-    forkJoin({ rows: this.api.orders(), fields: this.api.fields() }).subscribe({
-      next: ({ rows, fields }) => {
+  private loadedFirm: number | null = null;
+
+  load(firm = this.firmId()) {
+    if (firm !== this.loadedFirm) this.loading.set(true); // a spinner for another firm, not for a refresh
+    this.error.set('');
+    forkJoin({ rows: this.api.orders(firm), fields: this.api.fields(), columns: this.api.columns() }).subscribe({
+      next: ({ rows, fields, columns }) => {
+        if (firm !== this.firmId()) return; // the user already moved on to the other firm
         this.orders.set(rows);
         this.fields.set(fields);
+        this.columnOrder.set(columns.orders);
+        this.loadedFirm = firm;
         // Keep the detail panel showing fresh data after an edit.
         const open = this.selected();
         if (open) this.selected.set(rows.find((o) => o.id === open.id) ?? null);
@@ -194,7 +235,7 @@ export class OrdersPage {
 
   exportExcel() {
     this.exporting.set(true);
-    this.api.exportExcel('orders').subscribe({
+    this.api.exportExcel('orders', this.firmId()).subscribe({
       next: (res) => {
         saveResponse(res, 'Orders.xlsx');
         this.exporting.set(false);
@@ -213,11 +254,7 @@ export class OrdersPage {
   clearFilters() {
     this.search.set('');
     this.customer.set('');
+    this.vendor.set('');
     this.status.set('all');
-  }
-
-  private statusFromUrl(): StatusFilter {
-    const value = this.route.snapshot.queryParamMap.get('status');
-    return value && value in STATUS_FILTERS ? (value as StatusFilter) : 'all';
   }
 }

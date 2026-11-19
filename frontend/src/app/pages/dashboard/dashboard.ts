@@ -1,9 +1,10 @@
 import { DatePipe, NgTemplateOutlet } from '@angular/common';
-import { Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import { Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { forkJoin } from 'rxjs';
 import { Api, errorMessage } from '../../core/api';
 import { Auth } from '../../core/auth';
+import { Firms } from '../../core/firms';
 import { UploadDialog } from '../../core/upload-dialog';
 import { Dashboard, Upload } from '../../core/models';
 import { BarChart, BarSeries } from '../../shared/bar-chart';
@@ -22,13 +23,8 @@ interface QuickLink {
   adminOnly?: boolean;
 }
 
-const QUICK_LINKS: QuickLink[] = [
-  { label: 'Upload Excel sheet', hint: 'PO summary or quotations', icon: 'upload_file', tile: 'green', action: 'upload', adminOnly: true },
-  { label: 'Unpaid invoices', hint: 'Chase payments', icon: 'payments', tile: 'orange', link: '/orders', query: { status: 'unpaid' } },
-  { label: 'Work to bill', hint: 'PO received, no invoice', icon: 'receipt_long', tile: 'blue', link: '/orders', query: { status: 'not_invoiced' } },
-  { label: 'Quotes awaiting PO', hint: 'Follow up with indentors', icon: 'request_quote', tile: 'violet', link: '/quotations', query: { status: 'open' } },
-  { label: 'Manage users', hint: 'Add staff, reset passwords', icon: 'group', tile: 'teal', link: '/users', adminOnly: true },
-];
+const UPLOAD_LINK: QuickLink = { label: 'Upload Excel sheet', hint: 'PO summary or quotations', icon: 'upload_file', tile: 'green', action: 'upload', adminOnly: true };
+const USERS_LINK: QuickLink = { label: 'Manage users', hint: 'Add staff, reset passwords', icon: 'group', tile: 'teal', link: '/users', adminOnly: true };
 
 @Component({
   selector: 'app-dashboard',
@@ -39,8 +35,18 @@ export class DashboardPage {
   private api = inject(Api);
   protected auth = inject(Auth);
   protected upload = inject(UploadDialog);
+  protected firms = inject(Firms);
   protected agingStatus = agingStatus;
   protected Math = Math;
+
+  /** ?firm=2 in the address: show only that firm. No value: all active firms together. */
+  readonly firm = input<string>();
+  protected selectedFirm = computed(() => (this.firm() ? Number(this.firm()) : null));
+  /** The firms whose numbers are on screen. */
+  protected shownFirms = computed(() => {
+    const id = this.selectedFirm();
+    return id ? this.firms.list().filter((f) => f.id === id) : this.firms.active();
+  });
 
   protected data = signal<Dashboard | null>(null);
   protected lastUpload = signal<Upload | null>(null);
@@ -54,7 +60,16 @@ export class DashboardPage {
     return firstName ? `${part}, ${firstName}` : part;
   });
 
-  protected quickLinks = computed(() => QUICK_LINKS.filter((q) => !q.adminOnly || this.auth.isAdmin()));
+  protected quickLinks = computed(() =>
+    [
+      UPLOAD_LINK,
+      ...this.shownFirms().flatMap((f): QuickLink[] => [
+        { label: `${f.name}: unpaid`, hint: 'Invoices to chase', icon: 'payments', tile: 'orange', link: `/orders/${f.id}`, query: { status: 'unpaid' } },
+        { label: `${f.name}: quotes awaiting PO`, hint: 'Follow up with indentors', icon: 'request_quote', tile: 'violet', link: `/quotations/${f.id}`, query: { status: 'open' } },
+      ]),
+      USERS_LINK,
+    ].filter((q) => !q.adminOnly || this.auth.isAdmin()),
+  );
 
   protected isEmpty = computed(() => {
     const k = this.data()?.kpis;
@@ -66,15 +81,20 @@ export class DashboardPage {
     return k && k.invoiced_total ? Math.round((k.received_total / k.invoiced_total) * 100) : 0;
   });
 
-  /** Clickable "needs attention" tiles, like the Priority Level panel in the old Zoho app. */
+  /** "Needs attention" tiles, like the Priority Level panel in the old Zoho app. Each shows the count
+   *  for both firms together, and a link per firm to that firm's orders with the filter on. */
   protected attention = computed(() => {
     const a = this.data()?.attention;
     if (!a) return [];
+    const tile = (label: string, rows: { firm_id: number }[], icon: string, tileColor: string, status: string) => ({
+      label, icon, tile: tileColor, status, count: rows.length,
+      perFirm: this.shownFirms().map((f) => ({ id: f.id, name: f.name, count: rows.filter((r) => r.firm_id === f.id).length })),
+    });
     return [
-      { label: 'Unpaid invoices', count: a.unpaid_invoices.length, icon: 'payments', tile: 'orange', status: 'unpaid' },
-      { label: 'Work to bill', count: a.to_invoice.length, icon: 'receipt_long', tile: 'blue', status: 'not_invoiced' },
-      { label: 'DC not received', count: a.dc_not_received.length, icon: 'local_shipping', tile: 'amber', status: 'dc_pending' },
-      { label: 'GRN pending', count: a.grn_pending.length, icon: 'fact_check', tile: 'violet', status: 'grn_pending' },
+      tile('Unpaid invoices', a.unpaid_invoices, 'payments', 'orange', 'unpaid'),
+      tile('Work to bill', a.to_invoice, 'receipt_long', 'blue', 'not_invoiced'),
+      tile('DC not received', a.dc_not_received, 'local_shipping', 'amber', 'dc_pending'),
+      tile('GRN pending', a.grn_pending, 'fact_check', 'violet', 'grn_pending'),
     ];
   });
 
@@ -116,21 +136,22 @@ export class DashboardPage {
 
 
   constructor() {
-    // Runs once now, and again whenever an Excel import finishes (upload.version changes).
+    // Runs once now, again whenever data changes (upload.version), and when another firm is chosen.
     effect(() => {
       this.upload.version();
-      untracked(() => this.load());
+      const firm = this.selectedFirm();
+      untracked(() => this.load(firm));
     });
   }
 
-  load() {
+  load(firm: number | null) {
     this.loading.set(true);
     this.error.set('');
     // forkJoin runs both requests in parallel and waits for both to finish.
-    forkJoin({ dashboard: this.api.dashboard(), uploads: this.api.uploads() }).subscribe({
+    forkJoin({ dashboard: this.api.dashboard(firm), uploads: this.api.uploads() }).subscribe({
       next: ({ dashboard, uploads }) => {
         this.data.set(dashboard);
-        this.lastUpload.set(uploads[0] ?? null);
+        this.lastUpload.set(uploads.find((u) => !firm || u.firm_id === firm) ?? null);
         this.loading.set(false);
       },
       error: (err) => {

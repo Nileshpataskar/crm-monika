@@ -19,8 +19,40 @@ export interface LoginResponse {
 /** Values of the admin's custom columns, by key: { site_engineer: 'Ravi' } */
 export type Extra = Record<string, string | number | boolean | null>;
 
+/** One of the client's two firms. Every order, quotation and upload belongs to one. */
+export interface Firm {
+  id: number;
+  name: string;
+  position: number;
+  gstin: string | null;
+  contact_person: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  notes: string | null;
+  archived_at: string | null; // set = archived: hidden from menus and the dashboard, data kept
+}
+
+/** The editable part of a firm, as sent by the firm form. `archived` archives / restores. */
+export type FirmInput = Partial<Pick<Firm, 'name' | 'gstin' | 'contact_person' | 'phone' | 'email' | 'address' | 'notes'>> & {
+  archived?: boolean;
+};
+
+/** Numbers for one firm on the Firms page. */
+export interface FirmSummary {
+  firm_id: number;
+  orders: number;
+  quotations: number;
+  uploads: number;
+  invoiced: number;
+  received: number;
+  outstanding: number;
+  last_upload: string | null;
+}
+
 export interface Order {
   id: number;
+  firm_id: number;
   upload_id: number | null; // null = typed into the app
   extra: Extra | null;
   sheet_name: string;
@@ -56,6 +88,7 @@ export interface Order {
 
 export interface Quotation {
   id: number;
+  firm_id: number;
   upload_id: number | null; // null = typed into the app
   extra: Extra | null;
   sheet_name: string;
@@ -82,6 +115,7 @@ export interface Quotation {
 
 export interface Upload {
   id: number;
+  firm_id: number | null;
   filename: string;
   uploaded_at: string;
   orders_imported: number;
@@ -116,6 +150,7 @@ export interface UploadResult extends UploadPlan {
 
 export interface Period {
   type: 'orders' | 'quotations';
+  firm_id: number;
   period: string;
   label: string;
   rows: number; // rows from Excel that are shown
@@ -141,13 +176,14 @@ export interface UploadView {
 
 /** What a delete removed, or would remove when dry_run is true. */
 export interface DeleteResult {
-  deleted: { type: 'orders' | 'quotations'; period: string; label: string; rows: number; restored: { label: string; rows: number }[] }[];
+  deleted: { type: 'orders' | 'quotations'; firm_id: number; period: string; label: string; rows: number; restored: { label: string; rows: number }[] }[];
   file_deleted?: boolean;
   dry_run: boolean;
 }
 
 export interface BriefOrder {
   id: number;
+  firm_id: number;
   customer: string | null;
   po_number: string | null;
   dc_number: string | null;
@@ -169,11 +205,13 @@ export interface Dashboard {
     won_quotes_value: number;
   };
   by_customer: { customer: string; invoiced: number; received: number; outstanding: number }[];
+  by_firm: FirmPayments[];
   by_category: { category: string; orders: number; invoiced: number }[];
   by_month: { month: string; invoiced: number }[];
   attention: {
     unpaid_invoices: {
       id: number;
+      firm_id: number;
       customer: string | null;
       invoice_number: string | null;
       invoice_date: string | null;
@@ -199,3 +237,30 @@ export interface CustomField {
   type: FieldType;
   position: number;
 }
+
+/** Payments of one firm, split by vendor code (the number each customer gave the firm). */
+export interface FirmPayments {
+  firm_id: number;
+  name: string;
+  invoiced: number;
+  received: number;
+  outstanding: number;
+  vendors: {
+    vendor_code: string | null;
+    customers: string[];
+    invoices: number;
+    invoiced: number;
+    received: number;
+    outstanding: number;
+  }[];
+}
+
+/** A work location for quotations. id is null for one that's only used by quotations, not in the list. */
+export interface WorkLocation {
+  id: number | null;
+  name: string;
+  quotations: number;
+}
+
+/** Column order per table: built-in column names and "custom:<id>" for custom columns. */
+export type ColumnOrders = Record<Entity, string[]>;

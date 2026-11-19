@@ -1,7 +1,8 @@
 import { Component, ElementRef, afterNextRender, input, output, viewChild } from '@angular/core';
 
 /**
- * "Are you sure?" box for destructive actions. The details go inside the tag:
+ * "Are you sure?" box. Red for deleting (the default); danger=false for milder actions like archiving.
+ * The details go inside the tag:
  *   <app-confirm-dialog title="Delete June?" confirmLabel="Delete" (confirmed)="..." (cancelled)="...">...</app-confirm-dialog>
  */
 @Component({
@@ -16,8 +17,9 @@ import { Component, ElementRef, afterNextRender, input, output, viewChild } from
     >
       <div class="p-6">
         <div class="flex gap-4">
-          <span class="grid place-items-center shrink-0 size-11 rounded-full bg-critical-soft text-critical">
-            <span class="icon">delete</span>
+          <span class="grid place-items-center shrink-0 size-11 rounded-full"
+                [class]="danger() ? 'bg-critical-soft text-critical' : 'bg-warning-soft text-warning-ink'">
+            <span class="icon">{{ danger() ? 'delete' : 'help' }}</span>
           </span>
           <div class="min-w-0 flex-1">
             <h2 class="!text-lg">{{ title() }}</h2>
@@ -27,9 +29,9 @@ import { Component, ElementRef, afterNextRender, input, output, viewChild } from
       </div>
       <div class="flex justify-end gap-2 px-6 py-4 bg-surface-2 border-t border-line rounded-b-2xl">
         <button class="btn" (click)="cancelled.emit()" [disabled]="busy()">Cancel</button>
-        <button class="btn !bg-critical !border-critical !text-white hover:brightness-110" (click)="confirmed.emit()"
-                [disabled]="busy() || !ready()">
-          @if (busy()) { <span class="spinner"></span> Deleting… } @else { {{ confirmLabel() }} }
+        <button class="btn" [class]="danger() ? '!bg-critical !border-critical !text-white hover:brightness-110' : 'btn-primary'"
+                (click)="confirmed.emit()" [disabled]="busy() || !ready()">
+          @if (busy()) { <span class="spinner"></span> {{ danger() ? 'Deleting…' : 'Saving…' }} } @else { {{ confirmLabel() }} }
         </button>
       </div>
     </dialog>
@@ -39,6 +41,7 @@ export class ConfirmDialog {
   readonly title = input.required<string>();
   readonly confirmLabel = input('Delete');
   readonly busy = input(false);
+  readonly danger = input(true);
   /** False while the details are still loading, so the user can't confirm blind. */
   readonly ready = input(true);
   readonly confirmed = output<void>();

@@ -22,6 +22,7 @@ export class RecordForm {
 
   readonly entity = input.required<Entity>();
   readonly row = input<Row | null>(null); // null = new
+  readonly firm = input.required<number>(); // a new row is added to this firm
   readonly customFields = input<CustomField[]>([]);
   readonly suggestions = input<Record<string, string[]>>({});
   readonly saved = output<Row>();
@@ -36,6 +37,8 @@ export class RecordForm {
   protected error = signal('');
   protected confirmDelete = signal(false);
   protected deleting = signal(false);
+  /** Choice fields where the user picked "New…" and is typing a value that isn't in the list. */
+  protected typingNew = signal<Record<string, boolean>>({});
 
   protected sections = computed(() => formSections(this.entity(), this.customFields()));
   protected isNew = computed(() => !this.row());
@@ -72,6 +75,26 @@ export class RecordForm {
   set(key: string, value: string) {
     this.values.update((v) => ({ ...v, [key]: value }));
     this.error.set(''); // the message was about the old values
+  }
+
+  /** The list for a choice field, plus the row's current value if it isn't in the list. */
+  choices(field: FormField): string[] {
+    const list = this.suggestions()[field.key] ?? [];
+    const current = this.values()[field.key];
+    return current && !list.includes(current) ? [current, ...list] : list;
+  }
+
+  initialValue(key: string) {
+    return this.initial[key] ?? '';
+  }
+
+  pickChoice(field: FormField, value: string) {
+    if (value === '__new__') {
+      this.typingNew.update((t) => ({ ...t, [field.key]: true }));
+      this.set(field.key, '');
+    } else {
+      this.set(field.key, value);
+    }
   }
 
   datalistId(field: FormField) {
@@ -116,6 +139,7 @@ export class RecordForm {
       (field.custom ? extra : body)[field.key] = this.convert(field, text);
     }
     if (Object.keys(extra).length) body['extra'] = extra;
+    if (this.isNew()) body['firm_id'] = this.firm();
     if (!this.isNew() && !Object.keys(body).length) return this.close();
 
     this.saving.set(true);

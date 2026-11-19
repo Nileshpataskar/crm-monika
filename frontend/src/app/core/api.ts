@@ -1,8 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import {
-  CustomField, Dashboard, DeleteResult, Entity, FieldType, Order, Period, Quotation, Role, Upload, UploadPlan, UploadResult,
-  UploadView, User,
+  ColumnOrders, CustomField, Dashboard, DeleteResult, Entity, FieldType, Firm, FirmInput, FirmSummary, Order, Period, Quotation, Role, Upload, UploadPlan, UploadResult, UploadView, User, WorkLocation,
 } from './models';
 
 // "/api" is forwarded to FastAPI by proxy.conf.json during development, so no CORS setup is needed.
@@ -13,16 +12,38 @@ const API = '/api';
 export class Api {
   private http = inject(HttpClient);
 
-  dashboard() {
-    return this.http.get<Dashboard>(`${API}/dashboard`);
+  /** All active firms together, or one firm. */
+  dashboard(firm?: number | null) {
+    return this.http.get<Dashboard>(`${API}/dashboard`, { params: firm ? { firm } : {} });
   }
 
-  orders() {
-    return this.http.get<Order[]>(`${API}/orders`);
+  // ----- firms -----
+  firms() {
+    return this.http.get<Firm[]>(`${API}/firms`);
   }
 
-  quotations() {
-    return this.http.get<Quotation[]>(`${API}/quotations`);
+  firmsSummary() {
+    return this.http.get<FirmSummary[]>(`${API}/firms/summary`);
+  }
+
+  saveFirm(body: FirmInput, id?: number) {
+    return id ? this.http.patch<Firm>(`${API}/firms/${id}`, body) : this.http.post<Firm>(`${API}/firms`, body);
+  }
+
+  moveFirm(id: number, direction: 'up' | 'down') {
+    return this.http.post<Firm[]>(`${API}/firms/${id}/move`, { direction });
+  }
+
+  deleteFirm(id: number) {
+    return this.http.delete<{ deleted: number }>(`${API}/firms/${id}`);
+  }
+
+  orders(firm: number) {
+    return this.http.get<Order[]>(`${API}/orders`, { params: { firm } });
+  }
+
+  quotations(firm: number) {
+    return this.http.get<Quotation[]>(`${API}/quotations`, { params: { firm } });
   }
 
   uploads() {
@@ -49,8 +70,9 @@ export class Api {
     return this.http.get<CustomField[]>(`${API}/fields`);
   }
 
-  createField(entity: Entity, label: string, type: FieldType) {
-    return this.http.post<CustomField>(`${API}/fields`, { entity, label, type });
+  /** after: the column key it goes after ('' = first). */
+  createField(entity: Entity, label: string, type: FieldType, after: string) {
+    return this.http.post<CustomField>(`${API}/fields`, { entity, label, type, after });
   }
 
   renameField(id: number, label: string) {
@@ -61,9 +83,31 @@ export class Api {
     return this.http.delete<{ deleted: number; values_removed: number }>(`${API}/fields/${id}`);
   }
 
-  /** Excel backup of orders, quotations or both, as a Blob. */
-  exportExcel(entity: Entity | 'all') {
-    return this.http.get(`${API}/export`, { params: { entity }, responseType: 'blob', observe: 'response' });
+  // ----- column order -----
+  columns() {
+    return this.http.get<ColumnOrders>(`${API}/columns`);
+  }
+
+  saveColumns(entity: Entity, columns: string[]) {
+    return this.http.put<string[]>(`${API}/columns/${entity}`, { columns });
+  }
+
+  // ----- work locations -----
+  locations() {
+    return this.http.get<WorkLocation[]>(`${API}/locations`);
+  }
+
+  addLocation(name: string) {
+    return this.http.post<WorkLocation[]>(`${API}/locations`, { name });
+  }
+
+  deleteLocation(id: number) {
+    return this.http.delete<WorkLocation[]>(`${API}/locations/${id}`);
+  }
+
+  /** One firm's orders, quotations or both as an Excel backup (a Blob). */
+  exportExcel(entity: Entity | 'all', firm: number) {
+    return this.http.get(`${API}/export`, { params: { entity, firm }, responseType: 'blob', observe: 'response' });
   }
 
   periods() {
@@ -71,12 +115,12 @@ export class Api {
   }
 
   /** Dry run: the server checks the file and says what would happen. Nothing is saved. */
-  previewUpload(file: File) {
-    return this.http.post<UploadPlan>(`${API}/upload/preview`, fileForm(file));
+  previewUpload(file: File, firm: number) {
+    return this.http.post<UploadPlan>(`${API}/upload/preview`, fileForm(file, firm));
   }
 
-  uploadExcel(file: File) {
-    return this.http.post<UploadResult>(`${API}/upload`, fileForm(file));
+  uploadExcel(file: File, firm: number) {
+    return this.http.post<UploadResult>(`${API}/upload`, fileForm(file, firm));
   }
 
   viewUpload(id: number) {
@@ -93,8 +137,8 @@ export class Api {
     return this.http.delete<DeleteResult>(`${API}/uploads/${id}`, { params: { dry_run: dryRun } });
   }
 
-  deletePeriod(type: string, period: string, dryRun: boolean) {
-    return this.http.delete<DeleteResult>(`${API}/periods/${type}/${period}`, { params: { dry_run: dryRun } });
+  deletePeriod(firm: number, type: string, period: string, dryRun: boolean) {
+    return this.http.delete<DeleteResult>(`${API}/periods/${firm}/${type}/${period}`, { params: { dry_run: dryRun } });
   }
 
   users() {
@@ -110,9 +154,10 @@ export class Api {
   }
 }
 
-function fileForm(file: File) {
+function fileForm(file: File, firm: number) {
   const form = new FormData();
   form.append('file', file);
+  form.append('firm_id', String(firm));
   return form;
 }
 

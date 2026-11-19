@@ -29,8 +29,30 @@ class UserPublic(SQLModel):
     is_active: bool
 
 
+class Firm(SQLModel, table=True):
+    """A business the client runs (they have more than one). Every order, quotation and upload
+    belongs to one firm. Details are optional and can be filled in later."""
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    position: int = 0  # order in the menu
+    gstin: str | None = None  # 15-character GST number, e.g. 27ABCDE1234F1Z5
+    contact_person: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    address: str | None = None
+    notes: str | None = None
+    # Set when the admin archives the firm: it leaves the menus and the dashboard, its data is kept.
+    archived_at: datetime | None = None
+
+    @field_serializer("archived_at")
+    def as_utc(self, value: datetime | None) -> str | None:
+        """Stored without a timezone (see Upload.as_utc), so say explicitly that it's UTC."""
+        return value.replace(tzinfo=value.tzinfo or timezone.utc).isoformat() if value else None
+
+
 class Upload(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
+    firm_id: int | None = Field(default=None, foreign_key="firm.id", index=True)
     filename: str
     uploaded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     orders_imported: int = 0
@@ -46,6 +68,7 @@ class Upload(SQLModel, table=True):
 class Order(SQLModel, table=True):
     """One row of the PO summary sheet: a PO line / job and its billing status."""
     id: int | None = Field(default=None, primary_key=True)
+    firm_id: int | None = Field(default=None, foreign_key="firm.id", index=True)
     upload_id: int | None = Field(default=None, foreign_key="upload.id")  # NULL = typed into the app
     sheet_name: str
     period: str | None = Field(default=None, index=True)  # "2026-05": re-uploading a month replaces it
@@ -87,6 +110,7 @@ class Order(SQLModel, table=True):
 class Quotation(SQLModel, table=True):
     """One row of the quotations sheet."""
     id: int | None = Field(default=None, primary_key=True)
+    firm_id: int | None = Field(default=None, foreign_key="firm.id", index=True)
     upload_id: int | None = Field(default=None, foreign_key="upload.id")  # NULL = typed into the app
     sheet_name: str
     period: str | None = Field(default=None, index=True)  # financial year, e.g. "2026-27"
@@ -120,6 +144,19 @@ class CustomField(SQLModel, table=True):
     label: str  # "Site Engineer": shown in the app and used as the Excel export header
     type: str = "text"  # "text", "number", "date" or "yesno"
     position: int = 0  # order of the columns
+
+
+class ColumnLayout(SQLModel, table=True):
+    """The order of the columns in the Orders or Quotations table, as the admin arranged them.
+    Built-in columns by name ("po_number"), custom columns as "custom:<id>"."""
+    entity: str = Field(primary_key=True)  # "orders" or "quotations"
+    columns: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+
+
+class WorkLocation(SQLModel, table=True):
+    """A work location offered in the quotation form and filter (MCD 1, FMD 4, KOMATSU, ...)."""
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(unique=True)
 
 
 class StoredFile(SQLModel, table=True):

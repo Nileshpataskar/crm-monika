@@ -54,9 +54,12 @@ def client(anon):
     return login(anon, "admin", "admin-pass")
 
 
-def upload(client, name):
+FIRM_1, FIRM_2 = 1, 2  # the two default firms of a fresh database
+
+
+def upload(client, name, firm=FIRM_1):
     with open(DATA / name, "rb") as f:
-        return client.post("/api/upload", files={"file": (name, f)})
+        return client.post("/api/upload", files={"file": (name, f)}, data={"firm_id": firm})
 
 
 def test_po_sheet_import(client):
@@ -100,7 +103,7 @@ def test_dashboard_totals_match_excel(client):
 
 
 def test_rejects_non_excel(client):
-    res = client.post("/api/upload", files={"file": ("notes.txt", b"hello")})
+    res = client.post("/api/upload", files={"file": ("notes.txt", b"hello")}, data={"firm_id": FIRM_1})
     assert res.status_code == 400
 
 
@@ -153,9 +156,9 @@ def make_workbook(sheet_name, changes=None):
     return out.getvalue()
 
 
-def upload_bytes(client, name, content, preview=False):
+def upload_bytes(client, name, content, preview=False, firm=FIRM_1):
     url = "/api/upload/preview" if preview else "/api/upload"
-    return client.post(url, files={"file": (name, content)})
+    return client.post(url, files={"file": (name, content)}, data={"firm_id": firm})
 
 
 def months(client):
@@ -242,11 +245,11 @@ def test_deleting_a_month_brings_back_the_older_copies(client):
     upload(client, "po_summary.xlsx")
     upload_bytes(client, "june.xlsx", make_workbook("JUNE - 2026", {"AA4": "YES"}))
 
-    preview = client.delete("/api/periods/orders/2026-06?dry_run=true").json()["deleted"][0]
+    preview = client.delete("/api/periods/1/orders/2026-06?dry_run=true").json()["deleted"][0]
     assert preview["rows"] == 15 and preview["restored"] == [{"label": "May 2026", "rows": 12}]
     assert months(client) == {"June 2026": 15, "May 2026": 3}  # dry run changed nothing
 
-    client.delete("/api/periods/orders/2026-06")
+    client.delete("/api/periods/1/orders/2026-06")
     assert months(client) == {"May 2026": 15}
     assert kpis(client)["received_total"] == 107365.56  # back to May's status
 
@@ -272,20 +275,20 @@ def test_older_month_uploaded_after_newer_stays_hidden_until_newer_is_deleted(cl
     upload_bytes(client, "june.xlsx", make_workbook("JUNE - 2026", {"AA4": "YES"}))
     upload(client, "po_summary.xlsx")  # May arrives later; June already has 12 of its orders
     assert months(client) == {"June 2026": 15, "May 2026": 3}
-    client.delete("/api/periods/orders/2026-06")
+    client.delete("/api/periods/1/orders/2026-06")
     assert months(client) == {"May 2026": 15}
     assert kpis(client)["invoiced_total"] == 196756.46
 
 
 def test_viewer_cannot_delete(anon):
     viewer = login(anon, "viewer", "viewer-pass")
-    assert viewer.delete("/api/periods/orders/2026-05").status_code == 403
+    assert viewer.delete("/api/periods/1/orders/2026-05").status_code == 403
 
 
 # ---------- typing in rows, custom columns, export ----------
 
 def test_add_edit_delete_an_order(client):
-    res = client.post("/api/orders", json={"customer": "BFL", "description": "Chiller service visit",
+    res = client.post("/api/orders", json={"firm_id": FIRM_1, "customer": "BFL", "description": "Chiller service visit",
                                            "order_date": "2026-06-10", "amount": 10000})
     assert res.status_code == 200, res.text
     order = res.json()
@@ -303,23 +306,24 @@ def test_add_edit_delete_an_order(client):
 
 def test_order_validation(client):
     assert client.post("/api/orders", json={"customer": "BFL"}).status_code == 400  # no description
-    assert client.post("/api/orders", json={"customer": "BFL", "description": "x", "amount": -5}).status_code == 400
-    res = client.post("/api/orders", json={"customer": "BFL", "description": "x",
+    assert client.post("/api/orders", json={"firm_id": FIRM_1, "customer": "BFL", "description": "x", "amount": -5}).status_code == 400
+    res = client.post("/api/orders", json={"firm_id": FIRM_1, "customer": "BFL", "description": "x",
                                            "order_date": "2026-06-10", "invoice_date": "2026-06-01"})
     assert "before the order date" in res.json()["detail"]
     assert client.post("/api/orders", json={"customer": "BFL", "description": "x", "nope": 1}).status_code == 400
+    assert "firm" in client.post("/api/orders", json={"customer": "BFL", "description": "x"}).json()["detail"]
 
 
 def test_typed_in_rows_survive_reupload_and_delete_month(client):
     upload(client, "po_summary.xlsx")
-    client.post("/api/orders", json={"customer": "KCPTL", "description": "Extra job", "order_date": "2026-05-20"})
+    client.post("/api/orders", json={"firm_id": FIRM_1, "customer": "KCPTL", "description": "Extra job", "order_date": "2026-05-20"})
     upload(client, "po_summary.xlsx")  # May again
-    client.delete("/api/periods/orders/2026-05")
+    client.delete("/api/periods/1/orders/2026-05")
     assert [o["description"] for o in client.get("/api/orders").json()] == ["Extra job"]
 
 
 def test_add_quotation(client):
-    res = client.post("/api/quotations", json={"work_title": "MCD 1 - AC duct work", "total_amount": 50000,
+    res = client.post("/api/quotations", json={"firm_id": FIRM_1, "work_title": "MCD 1 - AC duct work", "total_amount": 50000,
                                                "work_date": "2027-02-01"})
     assert res.status_code == 200 and res.json()["period"] == "2026-27"  # Feb 2027 is in FY 2026-27
     assert client.post("/api/quotations", json={"total_amount": 5}).status_code == 400  # no title
@@ -332,7 +336,7 @@ def test_custom_columns(client):
     assert client.post("/api/fields", json={"entity": "orders", "label": "site engineer"}).status_code == 400  # duplicate
     assert client.post("/api/fields", json={"entity": "orders", "label": "Customer Name"}).status_code == 400  # built-in
 
-    order = client.post("/api/orders", json={"customer": "BFL", "description": "x",
+    order = client.post("/api/orders", json={"firm_id": FIRM_1, "customer": "BFL", "description": "x",
                                              "extra": {"site_engineer": "Ravi", "warranty_till": "2027-03-31"}}).json()
     assert order["extra"] == {"site_engineer": "Ravi", "warranty_till": "2027-03-31"}
     assert client.patch(f"/api/orders/{order['id']}", json={"extra": {"warranty_till": "soon"}}).status_code == 400
@@ -358,11 +362,11 @@ def test_export_is_a_backup_that_can_be_uploaded_again(anon, client):
     upload_bytes(client, "june.xlsx", make_workbook("JUNE - 2026", {"AA4": "YES"}))
     upload(client, "quotations.xlsx")
     client.post("/api/fields", json={"entity": "orders", "label": "Site Engineer"})
-    client.post("/api/orders", json={"customer": "BFL", "description": "Typed in", "order_date": "2026-07-02",
+    client.post("/api/orders", json={"firm_id": FIRM_1, "customer": "BFL", "description": "Typed in", "order_date": "2026-07-02",
                                      "amount": 1000, "extra": {"site_engineer": "Ravi"}})
     before = kpis(client)
 
-    res = client.get("/api/export?entity=all")
+    res = client.get("/api/export?entity=all&firm=1")
     assert res.headers["content-type"].startswith("application/vnd.openxmlformats")
     import io
     import openpyxl
@@ -371,7 +375,7 @@ def test_export_is_a_backup_that_can_be_uploaded_again(anon, client):
 
     # Wipe everything, then restore by uploading the backup.
     for p in client.get("/api/periods").json():
-        client.delete(f"/api/periods/{p['type']}/{p['period']}")
+        client.delete(f"/api/periods/{p['firm_id']}/{p['type']}/{p['period']}")
     for o in client.get("/api/orders").json():
         client.delete(f"/api/orders/{o['id']}")
     assert kpis(client)["orders"] == 0
@@ -382,3 +386,147 @@ def test_export_is_a_backup_that_can_be_uploaded_again(anon, client):
            {k: before[k] for k in ("orders", "invoiced_total", "received_total", "open_quotes_value")}
     typed = next(o for o in client.get("/api/orders").json() if o["description"] == "Typed in")
     assert typed["extra"] == {"site_engineer": "Ravi"}
+
+
+# ---------- two firms ----------
+
+def test_same_month_in_two_firms_is_kept_apart(client):
+    upload(client, "po_summary.xlsx", firm=FIRM_1)
+    upload(client, "po_summary.xlsx", firm=FIRM_2)  # same May sheet: must not replace firm 1's May
+    assert len(client.get("/api/orders?firm=1").json()) == 15
+    assert len(client.get("/api/orders?firm=2").json()) == 15
+    assert kpis(client)["invoiced_total"] == 2 * 196756.46  # the dashboard adds both firms
+
+    client.delete("/api/periods/2/orders/2026-05")
+    assert len(client.get("/api/orders?firm=1").json()) == 15
+    assert client.get("/api/orders?firm=2").json() == []
+
+
+def test_upload_needs_a_firm(client):
+    with open(DATA / "po_summary.xlsx", "rb") as f:
+        res = client.post("/api/upload", files={"file": ("po_summary.xlsx", f)})
+    assert res.status_code == 400 and "firm" in res.json()["detail"]
+
+
+def test_dashboard_payments_per_firm_and_vendor_code(client):
+    upload(client, "po_summary.xlsx", firm=FIRM_1)
+    firms = client.get("/api/dashboard").json()["by_firm"]
+    assert [f["firm_id"] for f in firms] == [FIRM_1, FIRM_2]
+    first, second = firms
+    assert first["invoiced"] == 196756.46 and first["received"] == 107365.56
+    assert sum(v["invoiced"] for v in first["vendors"]) == pytest.approx(196756.46)
+    assert {v["vendor_code"] for v in first["vendors"]} >= {"67791", "10675"}
+    assert second["vendors"] == [] and second["invoiced"] == 0
+
+
+def test_rename_firm(client):
+    res = client.patch("/api/firms/2", json={"name": "Ganesh Traders"})
+    assert res.json()["name"] == "Ganesh Traders"
+    assert [f["name"] for f in client.get("/api/firms").json()][1] == "Ganesh Traders"
+
+
+# ---------- column order and locations ----------
+
+def test_new_column_goes_where_asked_and_columns_can_be_moved(client):
+    res = client.post("/api/fields", json={"entity": "orders", "label": "Site Engineer", "after": "customer"})
+    key = f"custom:{res.json()['id']}"
+    order = client.get("/api/columns").json()["orders"]
+    assert order[order.index("customer") + 1] == key
+
+    new_order = [key] + [c for c in order if c != key]
+    assert client.put("/api/columns/orders", json={"columns": new_order}).json()[0] == key
+    assert client.put("/api/columns/orders", json={"columns": ["nope"]}).status_code == 400
+
+    # The Excel export follows the same order: first column.
+    upload(client, "po_summary.xlsx")
+    import io
+    import openpyxl
+    ws = openpyxl.load_workbook(io.BytesIO(client.get("/api/export?entity=orders&firm=1").content)).active
+    assert ws["A1"].value == "SITE ENGINEER"
+
+    client.delete(f"/api/fields/{res.json()['id']}")
+    assert key not in client.get("/api/columns").json()["orders"]
+
+
+def test_locations_come_from_every_block_of_the_sheet(client):
+    upload(client, "quotations.xlsx")
+    names = {loc["name"] for loc in client.get("/api/locations").json()}
+    assert names == {"MCD 1", "MCD 2, 3", "FMD", "FMD 4", "KOMATSU", "KCPTL"}  # empty blocks too
+
+    assert client.post("/api/locations", json={"name": "Chakan Plant"}).status_code == 200
+    assert client.post("/api/locations", json={"name": "chakan plant"}).status_code == 400  # already there
+    client.post("/api/quotations", json={"firm_id": FIRM_1, "work_title": "x", "work_location": "Pune Office"})
+    by_name = {loc["name"]: loc for loc in client.get("/api/locations").json()}
+    assert "Pune Office" in by_name  # typed into a quotation, so added to the list
+
+    assert client.delete(f"/api/locations/{by_name['MCD 1']['id']}").status_code == 400  # in use
+    assert client.delete(f"/api/locations/{by_name['Chakan Plant']['id']}").status_code == 200
+
+
+# ---------- managing firms ----------
+
+def test_add_firm_with_details_and_validation(client):
+    res = client.post("/api/firms", json={"name": "Shree Cooling Services", "gstin": "27abcde1234f1z5",
+                                          "phone": "+91 98220 12345", "email": "accounts@shreecooling.in",
+                                          "contact_person": "Pawan Patil", "address": "MIDC, Baramati"})
+    assert res.status_code == 200, res.text
+    firm = res.json()
+    assert firm["gstin"] == "27ABCDE1234F1Z5" and firm["position"] == 2  # upper-cased, added at the end
+
+    assert "GSTIN" in client.post("/api/firms", json={"name": "X", "gstin": "123"}).json()["detail"]
+    assert "email" in client.post("/api/firms", json={"name": "X", "email": "nope"}).json()["detail"]
+    assert "already" in client.post("/api/firms", json={"name": "shree cooling services"}).json()["detail"]
+    assert client.post("/api/firms", json={"gstin": "27ABCDE1234F1Z5"}).status_code == 400  # no name
+
+    # Edit: only what's sent changes; "" clears a field.
+    res = client.patch(f"/api/firms/{firm['id']}", json={"phone": "", "notes": "Pays within 45 days"}).json()
+    assert res["phone"] is None and res["notes"] == "Pays within 45 days" and res["email"] == "accounts@shreecooling.in"
+
+    # The new firm works like the others.
+    assert upload(client, "po_summary.xlsx", firm=firm["id"]).status_code == 200
+    assert len(client.get(f"/api/orders?firm={firm['id']}").json()) == 15
+
+
+def test_firm_with_data_is_archived_not_deleted(client):
+    upload(client, "po_summary.xlsx", firm=FIRM_2)
+    res = client.delete(f"/api/firms/{FIRM_2}")
+    assert res.status_code == 400 and "Archive it instead" in res.json()["detail"]
+
+    client.patch(f"/api/firms/{FIRM_2}", json={"archived": True})
+    assert kpis(client)["orders"] == 0  # archived firms are left out of the combined dashboard
+    assert client.get(f"/api/dashboard?firm={FIRM_2}").json()["kpis"]["orders"] == 15  # but can be looked at alone
+    assert len(client.get(f"/api/orders?firm={FIRM_2}").json()) == 15  # and its data is all still there
+    res = upload(client, "po_summary.xlsx", firm=FIRM_2)
+    assert res.status_code == 400 and "archived" in res.json()["detail"]
+    assert client.patch(f"/api/firms/{FIRM_1}", json={"archived": True}).status_code == 400  # the last active firm
+
+    client.patch(f"/api/firms/{FIRM_2}", json={"archived": False})
+    assert kpis(client)["orders"] == 15
+
+
+def test_empty_firm_can_be_deleted_and_firms_reordered(client):
+    new = client.post("/api/firms", json={"name": "Third firm"}).json()
+    order = [f["name"] for f in client.post(f"/api/firms/{new['id']}/move", json={"direction": "up"}).json()]
+    assert order == ["Siddhivinayak Enterprises", "Third firm", "Second firm"]
+    assert client.delete(f"/api/firms/{new['id']}").status_code == 200
+    assert [f["name"] for f in client.get("/api/firms").json()] == ["Siddhivinayak Enterprises", "Second firm"]
+
+
+def test_dashboard_for_one_firm(client):
+    upload(client, "po_summary.xlsx", firm=FIRM_1)
+    client.post("/api/orders", json={"firm_id": FIRM_2, "customer": "PIAGGIO", "description": "AC service", "amount": 1000,
+                                     "invoice_number": "9", "invoice_date": "2026-06-02"})
+    assert client.get(f"/api/dashboard?firm={FIRM_1}").json()["kpis"]["invoiced_total"] == 196756.46
+    assert client.get(f"/api/dashboard?firm={FIRM_2}").json()["kpis"]["invoiced_total"] == 1180
+    assert kpis(client)["invoiced_total"] == 196756.46 + 1180
+
+    summary = {s["firm_id"]: s for s in client.get("/api/firms/summary").json()}
+    assert summary[FIRM_1]["orders"] == 15 and summary[FIRM_1]["uploads"] == 1
+    assert summary[FIRM_2]["outstanding"] == 1180
+
+
+def test_viewer_cannot_manage_firms(anon):
+    viewer = login(anon, "viewer", "viewer-pass")
+    assert viewer.post("/api/firms", json={"name": "X"}).status_code == 403
+    assert viewer.patch(f"/api/firms/{FIRM_1}", json={"name": "X"}).status_code == 403
+    assert viewer.get("/api/firms/summary").status_code == 200

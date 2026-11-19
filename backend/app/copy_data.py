@@ -15,10 +15,10 @@ from sqlmodel import SQLModel
 
 from . import models  # noqa: F401  (registers the tables)
 from .db import create_tables, engine, engine_for
-from .models import CustomField, Order, Quotation, StoredFile, Upload, User
+from .models import ColumnLayout, CustomField, Firm, Order, Quotation, StoredFile, Upload, User, WorkLocation
 
 # Parents before children, because of the foreign keys (an order points at its upload).
-TABLES = [User, Upload, CustomField, Order, Quotation, StoredFile]
+TABLES = [User, Firm, Upload, CustomField, ColumnLayout, WorkLocation, Order, Quotation, StoredFile]
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploads"))
 
 
@@ -51,7 +51,7 @@ def main(target_url: str):
         # PostgreSQL hands out new ids from a counter. We inserted our own ids, so move the counter on.
         if dst.dialect.name == "postgresql":
             for model in TABLES:
-                if model is StoredFile:
+                if model in (StoredFile, ColumnLayout):  # no id counter
                     continue
                 name = model.__table__.name
                 dst.execute(text(f"SELECT setval(pg_get_serial_sequence('\"{name}\"', 'id'), "

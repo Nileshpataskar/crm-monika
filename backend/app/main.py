@@ -2,10 +2,11 @@
 import os
 import re
 from contextlib import asynccontextmanager
+from typing import Literal
 from datetime import date
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.security import OAuth2PasswordRequestForm
@@ -18,9 +19,13 @@ from .dashboard import build_dashboard
 from .db import create_tables, engine, get_session
 from .excel_export import build_workbook
 from .excel_import import parse_workbook, period_label, workbook_grid
+from .firms import all_firms, create_firm, delete_firm, firm_counts, get_firm, move_firm, update_firm
 from .importer import TABLES, VISIBLE, commit_import, delete_period, delete_upload, plan_import
-from .models import CustomField, Order, Quotation, StoredFile, Upload, User, UserPublic
-from .records import FIELD_TYPES, check_label, custom_fields, custom_fields_for_import, delete_field, rename_field, save
+from .models import CustomField, Firm, Order, Quotation, StoredFile, Upload, User, UserPublic, WorkLocation
+from .records import (
+    FIELD_TYPES, add_locations, check_label, column_order, custom_fields, custom_fields_for_import, delete_field,
+    list_locations, place_column, rename_field, save, save_column_order,
+)
 
 
 def create_first_admin():
@@ -136,6 +141,71 @@ def update_user(user_id: int, body: UserUpdate, admin: User = Depends(require_ad
     return user
 
 
+# ---------- firms ----------
+
+class FirmIn(BaseModel):
+    """Firm form. Every field is optional on edit: only what's sent changes."""
+    name: str | None = None
+    gstin: str | None = None
+    contact_person: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    address: str | None = None
+    notes: str | None = None
+    archived: bool | None = None  # true = archive, false = restore
+
+
+class FirmMove(BaseModel):
+    direction: Literal["up", "down"]
+
+
+@app.get("/api/firms", response_model=list[Firm], dependencies=[Depends(get_current_user)])
+def list_firms(session: Session = Depends(get_session)):
+    """All firms, archived ones too (they have archived_at set), in menu order."""
+    return all_firms(session)
+
+
+@app.get("/api/firms/summary", dependencies=[Depends(get_current_user)])
+def firms_summary(session: Session = Depends(get_session)):
+    """Per firm: how many orders, quotations and uploads it has, and its money totals."""
+    counts = firm_counts(session)
+    empty = {"orders": 0, "quotations": 0, "uploads": 0, "invoiced": 0, "received": 0, "outstanding": 0, "last_upload": None}
+    return [{"firm_id": f.id, **counts.get(f.id, empty)} for f in all_firms(session)]
+
+
+@app.post("/api/firms", response_model=Firm, dependencies=[Depends(require_admin)])
+def add_firm(body: FirmIn, session: Session = Depends(get_session)):
+    if not body.name:
+        raise HTTPException(400, "Firm name is required")
+    firm = create_firm(session, body.model_dump(exclude_unset=True))
+    session.commit()
+    session.refresh(firm)
+    return firm
+
+
+@app.patch("/api/firms/{firm_id}", response_model=Firm, dependencies=[Depends(require_admin)])
+def edit_firm(firm_id: int, body: FirmIn, session: Session = Depends(get_session)):
+    # exclude_unset: a field left out of the request isn't touched; one sent as "" is cleared.
+    firm = update_firm(session, get_firm(session, firm_id), body.model_dump(exclude_unset=True))
+    session.commit()
+    session.refresh(firm)
+    return firm
+
+
+@app.post("/api/firms/{firm_id}/move", response_model=list[Firm], dependencies=[Depends(require_admin)])
+def reorder_firm(firm_id: int, body: FirmMove, session: Session = Depends(get_session)):
+    move_firm(session, get_firm(session, firm_id), -1 if body.direction == "up" else 1)
+    session.commit()
+    return all_firms(session)
+
+
+@app.delete("/api/firms/{firm_id}", dependencies=[Depends(require_admin)])
+def remove_firm(firm_id: int, session: Session = Depends(get_session)):
+    delete_firm(session, get_firm(session, firm_id))
+    session.commit()
+    return {"deleted": firm_id}
+
+
 # ---------- data ----------
 
 # Vercel refuses requests over 4.5 MB, so stay under that. The client's sheets are a few KB.
@@ -144,8 +214,9 @@ MAX_UPLOAD_MB = 4
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploads"))
 
 
-async def read_and_plan(file: UploadFile, session: Session):
-    """Checks shared by preview and import: file type, size, readable workbook, at least one known sheet."""
+async def read_and_plan(file: UploadFile, session: Session, firm_id: int | None):
+    """Checks shared by preview and import: firm, file type, size, readable workbook, at least one known sheet."""
+    firm = get_firm(session, firm_id, active=True)
     if not (file.filename or "").lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(400, "Please upload an Excel .xlsx file")
     content = await file.read()
@@ -159,7 +230,7 @@ async def read_and_plan(file: UploadFile, session: Session):
         raise HTTPException(400, "Could not read this file as an Excel workbook. Is it password-protected or damaged?")
     if not any(s.kind for s in sheets):
         raise HTTPException(400, "No PO summary or quotation sheet found in this file. Check the column headers.")
-    return plan_import(session, sheets), content
+    return plan_import(session, sheets, firm.id), content, firm
 
 
 def plan_response(plans) -> dict:
@@ -173,19 +244,20 @@ def plan_response(plans) -> dict:
 
 
 @app.post("/api/upload/preview", dependencies=[Depends(require_admin)])
-async def preview_upload(file: UploadFile, session: Session = Depends(get_session)):
-    """Dry run: shows what importing this file would do. Nothing is saved."""
-    plans, _ = await read_and_plan(file, session)
+async def preview_upload(file: UploadFile, firm_id: int | None = Form(None), session: Session = Depends(get_session)):
+    """Dry run: shows what importing this file into this firm would do. Nothing is saved."""
+    plans, _, _ = await read_and_plan(file, session, firm_id)
     return plan_response(plans)
 
 
 @app.post("/api/upload", dependencies=[Depends(require_admin)])
-async def upload_excel(file: UploadFile, session: Session = Depends(get_session)):
-    plans, content = await read_and_plan(file, session)
+async def upload_excel(file: UploadFile, firm_id: int | None = Form(None), session: Session = Depends(get_session)):
+    plans, content, firm = await read_and_plan(file, session, firm_id)
     result = plan_response(plans)
     if not result["can_import"]:
         raise HTTPException(400, "This file has errors. Fix them in Excel and upload again.")
-    upload = commit_import(session, plans, file.filename)
+    add_locations(session, [name for p in plans for name in p.sheet.locations])
+    upload = commit_import(session, plans, file.filename, firm.id)
     session.add(StoredFile(upload_id=upload.id, data=content))  # keep the original, to view/download later
     session.commit()
     return {"upload_id": upload.id, **result}
@@ -201,13 +273,13 @@ def list_periods(session: Session = Depends(get_session)):
     for kind, table in TABLES.items():
         hidden = func.sum(case((Order.replaced_by_period.is_not(None), 1), else_=0)) if kind == "orders" else func.sum(0)
         manual = func.sum(case((table.upload_id.is_(None), 1), else_=0))
-        for period, rows, hidden_rows, manual_rows, upload_id in session.exec(
-            select(table.period, func.count(), hidden, manual, func.max(table.upload_id))
-            .group_by(table.period).order_by(table.period.desc())
+        for firm_id, period, rows, hidden_rows, manual_rows, upload_id in session.exec(
+            select(table.firm_id, table.period, func.count(), hidden, manual, func.max(table.upload_id))
+            .group_by(table.firm_id, table.period).order_by(table.period.desc(), table.firm_id)
         ):
             hidden_rows, manual_rows = hidden_rows or 0, manual_rows or 0
             result.append({
-                "type": kind, "period": period, "label": period_label(period),
+                "type": kind, "firm_id": firm_id, "period": period, "label": period_label(period),
                 "rows": rows - hidden_rows - manual_rows, "hidden": hidden_rows, "manual": manual_rows,
                 "upload_id": upload_id, "filename": filenames.get(upload_id),
             })
@@ -215,16 +287,21 @@ def list_periods(session: Session = Depends(get_session)):
 
 
 @app.get("/api/orders", response_model=list[Order], dependencies=[Depends(get_current_user)])
-def list_orders(customer: str | None = None, session: Session = Depends(get_session)):
+def list_orders(firm: int | None = None, customer: str | None = None, session: Session = Depends(get_session)):
     query = select(Order).where(VISIBLE).order_by(Order.order_date.desc().nulls_last())
+    if firm is not None:
+        query = query.where(Order.firm_id == firm)
     if customer:
         query = query.where(Order.customer == customer)
     return session.exec(query).all()
 
 
 @app.get("/api/quotations", response_model=list[Quotation], dependencies=[Depends(get_current_user)])
-def list_quotations(session: Session = Depends(get_session)):
-    return session.exec(select(Quotation).order_by(Quotation.work_location, Quotation.excel_row)).all()
+def list_quotations(firm: int | None = None, session: Session = Depends(get_session)):
+    query = select(Quotation).order_by(Quotation.work_location, Quotation.excel_row)
+    if firm is not None:
+        query = query.where(Quotation.firm_id == firm)
+    return session.exec(query).all()
 
 
 # ---------- typing in / editing single rows (admin) ----------
@@ -293,6 +370,7 @@ class FieldCreate(BaseModel):
     entity: str
     label: str
     type: str = "text"
+    after: str | None = None  # the column it goes after ("" = first). Not given: just before Status.
 
 
 class FieldUpdate(BaseModel):
@@ -314,6 +392,8 @@ def create_field(body: FieldCreate, session: Session = Depends(get_session)):
     position = len(custom_fields(session, body.entity))
     field = CustomField(entity=body.entity, key=key, label=label, type=body.type, position=position)
     session.add(field)
+    session.flush()  # gives the field its id, which the column order refers to
+    place_column(session, field, body.after)
     session.commit()
     session.refresh(field)
     return field
@@ -340,27 +420,87 @@ def remove_field(field_id: int, session: Session = Depends(get_session)):
     return {"deleted": field_id, "values_removed": rows}
 
 
+# ---------- column order ----------
+
+class ColumnOrder(BaseModel):
+    columns: list[str]
+
+
+@app.get("/api/columns", dependencies=[Depends(get_current_user)])
+def get_columns(session: Session = Depends(get_session)):
+    """The order of the table columns, e.g. {"orders": ["order_date", "custom:3", "customer", ...]}."""
+    return {entity: column_order(session, entity) for entity in TABLES}
+
+
+@app.put("/api/columns/{entity}", dependencies=[Depends(require_admin)])
+def put_columns(entity: str, body: ColumnOrder, session: Session = Depends(get_session)):
+    if entity not in TABLES:
+        raise HTTPException(404, "Unknown table")
+    columns = save_column_order(session, entity, body.columns)
+    session.commit()
+    return columns
+
+
+# ---------- work locations ----------
+
+class LocationCreate(BaseModel):
+    name: str
+
+
+@app.get("/api/locations", dependencies=[Depends(get_current_user)])
+def get_locations(session: Session = Depends(get_session)):
+    return list_locations(session)
+
+
+@app.post("/api/locations", dependencies=[Depends(require_admin)])
+def create_location(body: LocationCreate, session: Session = Depends(get_session)):
+    name = " ".join(body.name.split())
+    if not name or len(name) > 60:
+        raise HTTPException(400, "Location name must be 1 to 60 characters")
+    if not add_locations(session, [name]):
+        raise HTTPException(400, f"{name} is already in the list")
+    session.commit()
+    return list_locations(session)
+
+
+@app.delete("/api/locations/{location_id}", dependencies=[Depends(require_admin)])
+def delete_location(location_id: int, session: Session = Depends(get_session)):
+    location = session.get(WorkLocation, location_id)
+    if not location:
+        raise HTTPException(404, "Location not found")
+    used = session.exec(select(func.count()).select_from(Quotation).where(Quotation.work_location == location.name)).one()
+    if used:
+        raise HTTPException(400, f"{used} quotation(s) use {location.name}. Change them to another location first.")
+    session.delete(location)
+    session.commit()
+    return list_locations(session)
+
+
 # ---------- export (backup) ----------
 
 @app.get("/api/export", dependencies=[Depends(get_current_user)])
-def export_excel(entity: str = "all", session: Session = Depends(get_session)):
-    """Excel backup in the client's own layout: one sheet per month / quotation year.
-    Uploading this file again restores the data."""
+def export_excel(firm: int, entity: str = "all", session: Session = Depends(get_session)):
+    """Excel backup of one firm in the client's own layout: one sheet per month / quotation year.
+    Uploading this file again (for the same firm) restores the data."""
     if entity not in ("orders", "quotations", "all"):
         raise HTTPException(400, "entity must be orders, quotations or all")
+    the_firm = get_firm(session, firm)
     sheets = []
     if entity in ("orders", "all"):
-        orders = session.exec(select(Order).where(VISIBLE).order_by(Order.period, Order.order_date, Order.id)).all()
+        orders = session.exec(select(Order).where(VISIBLE, Order.firm_id == firm)
+                              .order_by(Order.period, Order.order_date, Order.id)).all()
         for period in sorted({o.period for o in orders}, key=lambda p: p or ""):
             sheets.append(("orders", period, [o for o in orders if o.period == period]))
     if entity in ("quotations", "all"):
-        quotes = session.exec(select(Quotation).order_by(Quotation.period, Quotation.work_location, Quotation.id)).all()
+        quotes = session.exec(select(Quotation).where(Quotation.firm_id == firm)
+                              .order_by(Quotation.period, Quotation.work_location, Quotation.id)).all()
         for period in sorted({q.period for q in quotes}, key=lambda p: p or ""):
             sheets.append(("quotations", period, [q for q in quotes if q.period == period]))
     fields = {e: custom_fields(session, e) for e in TABLES}
-    content = build_workbook(sheets, fields)
+    content = build_workbook(sheets, fields, {e: column_order(session, e) for e in TABLES})
     name = {"orders": "Orders", "quotations": "Quotations", "all": "Backup"}[entity]
-    filename = f"Siddhivinayak_{name}_{date.today():%d-%m-%Y}.xlsx"
+    firm_name = re.sub(r"[^\w-]+", "_", the_firm.name).strip("_")
+    filename = f"{firm_name}_{name}_{date.today():%d-%m-%Y}.xlsx"
     return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
@@ -433,11 +573,11 @@ def download_upload(upload_id: int, session: Session = Depends(get_session)):
 
 # Deleting: `dry_run=true` returns exactly what would be removed and saves nothing, for the confirm box.
 
-@app.delete("/api/periods/{kind}/{period}", dependencies=[Depends(require_admin)])
-def remove_period(kind: str, period: str, dry_run: bool = False, session: Session = Depends(get_session)):
+@app.delete("/api/periods/{firm_id}/{kind}/{period}", dependencies=[Depends(require_admin)])
+def remove_period(firm_id: int, kind: str, period: str, dry_run: bool = False, session: Session = Depends(get_session)):
     if kind not in TABLES:
         raise HTTPException(404, "Unknown data type")
-    result = delete_period(session, kind, period)
+    result = delete_period(session, kind, period, get_firm(session, firm_id).id)
     if not result["rows"]:
         raise HTTPException(404, f"No data loaded for {result['label']}")
     if dry_run:
@@ -463,8 +603,9 @@ def remove_upload(upload_id: int, dry_run: bool = False, session: Session = Depe
 
 
 @app.get("/api/dashboard", dependencies=[Depends(get_current_user)])
-def dashboard(session: Session = Depends(get_session)):
-    return build_dashboard(session)
+def dashboard(firm: int | None = None, session: Session = Depends(get_session)):
+    """All active firms together, or one firm with ?firm=<id>."""
+    return build_dashboard(session, get_firm(session, firm).id if firm is not None else None)
 
 
 # ---------- the Angular app ----------

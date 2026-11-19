@@ -1,6 +1,7 @@
-import { Component, ElementRef, afterNextRender, computed, inject, input, output, signal, viewChild } from '@angular/core';
+import { Component, ElementRef, afterNextRender, computed, effect, inject, input, output, signal, untracked, viewChild } from '@angular/core';
 import { Observable } from 'rxjs';
 import { Api, errorMessage } from '../core/api';
+import { customKey, tableColumns } from '../core/columns';
 import { CustomField, Entity, FieldType } from '../core/models';
 import { ConfirmDialog } from './confirm-dialog';
 
@@ -11,7 +12,7 @@ const TYPES: { value: FieldType; label: string }[] = [
   { value: 'yesno', label: 'Yes / No' },
 ];
 
-/** Admin: add, rename and remove custom columns for Orders or Quotations. */
+/** Admin: put the Orders or Quotations columns in any order, and add, rename and remove custom columns. */
 @Component({
   selector: 'app-columns-dialog',
   imports: [ConfirmDialog],
@@ -22,6 +23,8 @@ export class ColumnsDialog {
 
   readonly entity = input.required<Entity>();
   readonly fields = input.required<CustomField[]>();
+  /** The saved column order (see core/columns.ts). */
+  readonly order = input.required<string[]>();
   /** Something changed: the page reloads its columns and rows. */
   readonly changed = output<void>();
   readonly closed = output<void>();
@@ -31,17 +34,41 @@ export class ColumnsDialog {
   protected types = TYPES;
   protected newLabel = signal('');
   protected newType = signal<FieldType>('text');
+  /** Key of the column the new one goes after; '' = at the start. */
+  protected newAfter = signal('');
   protected editingId = signal<number | null>(null);
   protected editLabel = signal('');
   protected removing = signal<CustomField | null>(null);
   protected busy = signal(false);
   protected error = signal('');
 
-  protected mine = computed(() => this.fields().filter((f) => f.entity === this.entity()));
+  /** Shown at once when moving, before the server answers, so the arrows feel instant. */
+  private localOrder = signal<string[] | null>(null);
+  protected columns = computed(() => tableColumns(this.entity(), this.localOrder() ?? this.order(), this.fields()));
   protected noun = computed(() => (this.entity() === 'orders' ? 'Orders' : 'Quotations'));
 
   constructor() {
     afterNextRender(() => this.dialogEl().nativeElement.showModal());
+    // New columns go just before Status unless the admin picks another place.
+    effect(() => {
+      const cols = this.columns();
+      untracked(() => {
+        if (!this.newAfter() || !cols.some((c) => c.key === this.newAfter())) {
+          const status = cols.findIndex((c) => c.key === 'status');
+          this.newAfter.set(cols[(status === -1 ? cols.length : status) - 1]?.key ?? '');
+        }
+      });
+    });
+  }
+
+  /** Move a column one place left (-1) or right (+1) in the table. */
+  move(index: number, step: -1 | 1) {
+    const keys = this.columns().map((c) => c.key);
+    const target = index + step;
+    if (target < 0 || target >= keys.length) return;
+    [keys[index], keys[target]] = [keys[target], keys[index]];
+    this.localOrder.set(keys);
+    this.run(this.api.saveColumns(this.entity(), keys), () => {}, () => this.localOrder.set(null));
   }
 
   typeLabel(type: FieldType) {
@@ -51,9 +78,13 @@ export class ColumnsDialog {
   add() {
     const label = this.newLabel().trim();
     if (!label) return this.error.set('Type a name for the new column.');
-    this.run(this.api.createField(this.entity(), label, this.newType()), () => {
+    this.run(this.api.createField(this.entity(), label, this.newType(), this.newAfter()), (field) => {
       this.newLabel.set('');
       this.newType.set('text');
+      // Show it in its new place straight away; the page reloads the saved order too.
+      const keys = this.columns().map((c) => c.key);
+      keys.splice(this.newAfter() ? keys.indexOf(this.newAfter()) + 1 : 0, 0, customKey(field as CustomField));
+      this.localOrder.set(keys);
     });
   }
 
@@ -75,13 +106,13 @@ export class ColumnsDialog {
     this.run(this.api.deleteField(field.id), () => this.removing.set(null), () => this.removing.set(null));
   }
 
-  private run(request: Observable<unknown>, done: () => void, failed?: () => void) {
+  private run<T>(request: Observable<T>, done: (result: T) => void, failed?: () => void) {
     this.busy.set(true);
     this.error.set('');
     request.subscribe({
-      next: () => {
+      next: (result) => {
         this.busy.set(false);
-        done();
+        done(result);
         this.changed.emit();
       },
       error: (err) => {

@@ -35,8 +35,12 @@ def create_tables():
     global _tables_ready
     if _tables_ready:
         return
+    from .firms import file_unassigned_rows
+
     SQLModel.metadata.create_all(engine)
     add_missing_columns()
+    with Session(engine) as session:
+        file_unassigned_rows(session)
     _tables_ready = True
 
 

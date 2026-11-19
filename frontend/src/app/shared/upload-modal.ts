@@ -2,6 +2,7 @@ import { DatePipe } from '@angular/common';
 import { Component, ElementRef, computed, effect, inject, signal, viewChild } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { Api, errorMessage } from '../core/api';
+import { Firms } from '../core/firms';
 import { Period, Upload, UploadPlan, UploadResult } from '../core/models';
 import { UploadDialog } from '../core/upload-dialog';
 
@@ -21,6 +22,7 @@ type Step = 'pick' | 'checking' | 'preview' | 'importing' | 'done';
 export class UploadModal {
   private api = inject(Api);
   protected dialog = inject(UploadDialog);
+  protected firms = inject(Firms);
   // Named dialogEl, not dialog: a template #ref with the same name as a property would hide it.
   private dialogEl = viewChild.required<ElementRef<HTMLDialogElement>>('dialogEl');
 
@@ -33,8 +35,12 @@ export class UploadModal {
   protected periods = signal<Period[]>([]);
   protected recent = signal<Upload[]>([]);
 
-  protected monthsLoaded = computed(() => this.periods().filter((p) => p.type === 'orders'));
-  protected yearsLoaded = computed(() => this.periods().filter((p) => p.type === 'quotations'));
+  /** Which firm the file is for. Everything (replacing months, the preview) happens inside that firm. */
+  protected firm = signal<number | null>(null);
+  protected firmName = computed(() => this.firms.name(this.firm()));
+  private firmPeriods = computed(() => this.periods().filter((p) => p.firm_id === this.firm()));
+  protected monthsLoaded = computed(() => this.firmPeriods().filter((p) => p.type === 'orders'));
+  protected yearsLoaded = computed(() => this.firmPeriods().filter((p) => p.type === 'quotations'));
   protected busy = computed(() => this.step() === 'checking' || this.step() === 'importing');
 
   constructor() {
@@ -43,6 +49,9 @@ export class UploadModal {
       const el = this.dialogEl().nativeElement;
       if (this.dialog.isOpen() && !el.open) {
         this.reset();
+        // Start with the firm whose page is open, if it's active (archived firms take no uploads).
+        const start = this.dialog.firm();
+        this.firm.set(this.firms.active().some((f) => f.id === start) ? start : null);
         this.loadInfo();
         el.showModal(); // showModal() = centred, with backdrop, Esc closes, focus stays inside
       } else if (!this.dialog.isOpen() && el.open) {
@@ -53,7 +62,7 @@ export class UploadModal {
 
   private loadInfo() {
     this.api.periods().subscribe((p) => this.periods.set(p));
-    this.api.uploads().subscribe((u) => this.recent.set(u.slice(0, 3)));
+    this.api.uploads().subscribe((u) => this.recent.set(u));
   }
 
   reset() {
@@ -65,9 +74,14 @@ export class UploadModal {
   }
 
   /** Step 1: checks we can do in the browser, before sending anything. */
+  /** The latest upload for the chosen firm. */
+  protected lastUpload = computed(() => this.recent().find((u) => u.firm_id === this.firm()) ?? null);
+
   pick(files: FileList | null) {
     this.error.set('');
     if (!files?.length) return;
+    const firm = this.firm();
+    if (firm === null) return this.error.set('First choose which firm this file is for.');
     if (files.length > 1) return this.error.set('Please choose one file at a time.');
     const file = files[0];
     if (!/\.(xlsx|xlsm)$/i.test(file.name)) {
@@ -79,7 +93,7 @@ export class UploadModal {
     // Step 2: the server reads the file and tells us what importing it would do.
     this.file.set(file);
     this.step.set('checking');
-    this.api.previewUpload(file).subscribe({
+    this.api.previewUpload(file, firm).subscribe({
       next: (plan) => {
         this.plan.set(plan);
         this.step.set('preview');
@@ -95,9 +109,10 @@ export class UploadModal {
   /** Step 3: the user confirmed, so import for real. */
   confirmImport() {
     const file = this.file();
-    if (!file || !this.plan()?.can_import) return;
+    const firm = this.firm();
+    if (!file || firm === null || !this.plan()?.can_import) return;
     this.step.set('importing');
-    this.api.uploadExcel(file).subscribe({
+    this.api.uploadExcel(file, firm).subscribe({
       next: (res) => {
         this.result.set(res);
         this.step.set('done');

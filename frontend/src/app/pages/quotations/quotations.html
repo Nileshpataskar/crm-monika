@@ -1,8 +1,8 @@
 <div class="max-w-[1400px] mx-auto px-4 py-5 lg:px-8 lg:py-7">
   <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
     <div>
-      <h1>Quotations</h1>
-      <p class="mt-1 text-ink-2">Quotes sent to customers, and whether each one turned into a PO.
+      <app-firm-heading [firm]="firmId()" title="Quotations" />
+      <p class="mt-1 text-ink-2">Quotes {{ firmName() }} sent to customers, and whether each one turned into a PO.
         @if (auth.isAdmin()) { Click a row to edit it. }</p>
     </div>
     <div class="flex flex-wrap gap-2">
@@ -10,11 +10,22 @@
         @if (exporting()) { <span class="spinner"></span> Exporting… } @else { <span class="icon">download</span>Export Excel }
       </button>
       @if (auth.isAdmin()) {
+        <button class="btn" (click)="showLocations.set(true)"><span class="icon">location_on</span>Locations</button>
         <button class="btn" (click)="showColumns.set(true)"><span class="icon">view_column</span>Columns</button>
-        <button class="btn btn-primary" (click)="editing.set('new')"><span class="icon">add</span>New quotation</button>
+        @if (!archived()) {
+          <button class="btn btn-primary" (click)="editing.set('new')"><span class="icon">add</span>New quotation</button>
+        }
       }
     </div>
   </div>
+
+  @if (archived()) {
+    <div class="alert warn mb-6">
+      <span class="icon">inventory</span>
+      <span>{{ firmName() }} is archived: its data is kept for reference, but it isn't in the menu or the dashboard
+        and takes no new entries or uploads. Restore it on the <a routerLink="/firms" class="font-semibold underline">Firms</a> page.</span>
+    </div>
+  }
 
   <!-- Summary tiles: click one to filter the table -->
   <div class="grid gap-4 grid-cols-2 xl:grid-cols-4 mb-6">
@@ -66,57 +77,62 @@
         <table class="data-table">
           <thead>
             <tr>
-              <th>Quote</th>
-              <th>Work</th>
-              <th>Location</th>
-              <th class="right">Quoted</th>
-              <th>PO</th>
-              @for (f of quoteFields(); track f.id) {
-                <th>{{ f.label }}</th>
+              @for (c of columns(); track c.key) {
+                <th [class.right]="c.key === 'total_amount'">{{ c.label }}</th>
               }
-              <th>Status</th>
             </tr>
           </thead>
           <tbody>
             @for (q of filtered(); track q.id) {
               <tr (click)="open(q)" [class]="auth.isAdmin() ? 'cursor-pointer hover:[&>td]:bg-surface-2' : ''">
-                <td class="whitespace-nowrap font-medium">{{ q.quote_number ? '#' + q.quote_number : '—' }}</td>
-                <td class="min-w-[280px]">
-                  <div class="font-medium">{{ q.work_title }}</div>
-                  <div class="text-xs text-ink-3 mt-0.5">
-                    {{ q.work_type ? q.work_type + ' · ' : '' }}{{ q.indentor }}
-                  </div>
-                </td>
-                <td class="whitespace-nowrap">{{ q.work_location ?? '—' }}</td>
-                <td class="right tabular-nums whitespace-nowrap">{{ q.total_amount | inr }}</td>
-                <td class="whitespace-nowrap">
-                  @if (q.po_number) {
-                    <div>{{ q.po_number }}</div>
-                    <div class="text-xs text-ink-3 mt-0.5 tabular-nums">{{ q.po_amount | inr }}</div>
+                @for (c of columns(); track c.key) {
+                  @if (c.custom; as f) {
+                    <td class="whitespace-nowrap max-w-[220px] truncate">{{ formatExtra(f, q.extra?.[f.key]) }}</td>
                   } @else {
-                    <span class="text-ink-3">—</span>
-                  }
-                </td>
-                @for (f of quoteFields(); track f.id) {
-                  <td class="whitespace-nowrap max-w-[220px] truncate">{{ formatExtra(f, q.extra?.[f.key]) }}</td>
-                }
-                <td>
-                  <div class="flex flex-col items-start gap-1">
-                    @let qs = quoteStatus(q);
-                    <span class="chip" [class]="qs.tone">{{ qs.label }}</span>
-                    @let ws = workStatus(q);
-                    <span class="chip" [class]="ws.tone">{{ ws.label }}</span>
-                    @if (q.po_number && q.payment_received !== null) {
-                      <span class="chip" [class]="q.payment_received ? 'good' : 'serious'">
-                        {{ q.payment_received ? 'Paid' : 'Unpaid' }}
-                      </span>
+                    @switch (c.key) {
+                      @case ('quote_number') { <td class="whitespace-nowrap font-medium">{{ q.quote_number ? '#' + q.quote_number : '—' }}</td> }
+                      @case ('work_title') {
+                        <td class="min-w-[280px]">
+                          <div class="font-medium">{{ q.work_title }}</div>
+                          <div class="text-xs text-ink-3 mt-0.5">
+                            {{ q.work_type ? q.work_type + ' · ' : '' }}{{ q.indentor }}
+                          </div>
+                        </td>
+                      }
+                      @case ('work_location') { <td class="whitespace-nowrap">{{ q.work_location ?? '—' }}</td> }
+                      @case ('total_amount') { <td class="right tabular-nums whitespace-nowrap">{{ q.total_amount | inr }}</td> }
+                      @case ('po_number') {
+                        <td class="whitespace-nowrap">
+                          @if (q.po_number) {
+                            <div>{{ q.po_number }}</div>
+                            <div class="text-xs text-ink-3 mt-0.5 tabular-nums">{{ q.po_amount | inr }}</div>
+                          } @else {
+                            <span class="text-ink-3">—</span>
+                          }
+                        </td>
+                      }
+                      @case ('status') {
+                        <td>
+                          <div class="flex flex-col items-start gap-1">
+                            @let qs = quoteStatus(q);
+                            <span class="chip" [class]="qs.tone">{{ qs.label }}</span>
+                            @let ws = workStatus(q);
+                            <span class="chip" [class]="ws.tone">{{ ws.label }}</span>
+                            @if (q.po_number && q.payment_received !== null) {
+                              <span class="chip" [class]="q.payment_received ? 'good' : 'serious'">
+                                {{ q.payment_received ? 'Paid' : 'Unpaid' }}
+                              </span>
+                            }
+                          </div>
+                        </td>
+                      }
                     }
-                  </div>
-                </td>
+                  }
+                }
               </tr>
             } @empty {
               <tr>
-                <td [attr.colspan]="6 + quoteFields().length" class="!py-12 text-center text-ink-2">
+                <td [attr.colspan]="columns().length" class="!py-12 text-center text-ink-2">
                   @if (quotes().length) { No quotations match these filters. } @else { No quotations yet. Upload a quotation sheet. }
                 </td>
               </tr>
@@ -136,10 +152,14 @@
 </div>
 
 @if (editing(); as e) {
-  <app-record-form entity="quotations" [row]="e === 'new' ? null : e" [customFields]="fields()" [suggestions]="suggestions()"
+  <app-record-form entity="quotations" [firm]="firmId()" [row]="e === 'new' ? null : e" [customFields]="fields()" [suggestions]="suggestions()"
                    (saved)="onChanged()" (deleted)="onChanged()" (closed)="editing.set(null)" />
 }
 
 @if (showColumns()) {
-  <app-columns-dialog entity="quotations" [fields]="fields()" (changed)="onChanged()" (closed)="showColumns.set(false)" />
+  <app-columns-dialog entity="quotations" [fields]="fields()" [order]="columnOrder()" (changed)="onChanged()" (closed)="showColumns.set(false)" />
+}
+
+@if (showLocations()) {
+  <app-locations-dialog [locations]="workLocations()" (changed)="workLocations.set($event)" (closed)="showLocations.set(false)" />
 }

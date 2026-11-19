@@ -3,6 +3,9 @@
 plan_import() works out what happens to each sheet without changing anything. The preview
 endpoint shows that plan to the user, and the import endpoint runs the same plan with commit_import().
 
+Every upload is for one firm, and everything below happens inside that firm: firm A's May is never
+replaced or hidden by firm B's May.
+
 Rules for monthly PO sheets:
   * A sheet belongs to a month ("JUNE - 2026" -> 2026-06).
   * Uploading a month that's already loaded replaces that month.
@@ -73,7 +76,7 @@ def same_order(a: dict, b: dict) -> bool:
 
 # ---------- import ----------
 
-def plan_import(session: Session, sheets: list[SheetResult]) -> list[SheetPlan]:
+def plan_import(session: Session, sheets: list[SheetResult], firm_id: int) -> list[SheetPlan]:
     plans = [SheetPlan(sheet=s) for s in sheets]
     seen = {}
     for s in sheets:
@@ -86,7 +89,8 @@ def plan_import(session: Session, sheets: list[SheetResult]) -> list[SheetPlan]:
     for plan in ready:
         table = TABLES[plan.sheet.kind]
         plan.existing_rows = session.exec(
-            select(func.count()).select_from(table).where(table.period == plan.sheet.period, from_excel(table))
+            select(func.count()).select_from(table)
+            .where(table.firm_id == firm_id, table.period == plan.sheet.period, from_excel(table))
         ).one()
         plan.rows = [dict(row) for row in plan.sheet.rows]
         if plan.sheet.kind == "orders":
@@ -99,7 +103,8 @@ def plan_import(session: Session, sheets: list[SheetResult]) -> list[SheetPlan]:
     order_plans = sorted((p for p in ready if p.sheet.kind == "orders"), key=lambda p: p.sheet.period)
     months = {p.sheet.period for p in order_plans}
     stored = session.exec(
-        select(Order).where(Order.period.not_in(months), or_(VISIBLE, Order.replaced_by_period.in_(months)))
+        select(Order).where(Order.firm_id == firm_id, Order.period.not_in(months),
+                            or_(VISIBLE, Order.replaced_by_period.in_(months)))
     ).all()
     candidates = [{**o.model_dump(), "_row": None} for o in stored]
 
@@ -124,8 +129,8 @@ def plan_import(session: Session, sheets: list[SheetResult]) -> list[SheetPlan]:
     return plans
 
 
-def commit_import(session: Session, plans: list[SheetPlan], filename: str) -> Upload:
-    upload = Upload(filename=filename)
+def commit_import(session: Session, plans: list[SheetPlan], filename: str, firm_id: int) -> Upload:
+    upload = Upload(filename=filename, firm_id=firm_id)
     session.add(upload)
     session.flush()  # sends the INSERT so upload.id is filled in
 
@@ -137,15 +142,18 @@ def commit_import(session: Session, plans: list[SheetPlan], filename: str) -> Up
         unhidden = []
         if s.kind == "orders":
             # Rows hidden behind the month we're replacing become visible again...
-            unhidden = session.exec(select(Order).where(Order.replaced_by_period == s.period)).all()
+            unhidden = session.exec(
+                select(Order).where(Order.firm_id == firm_id, Order.replaced_by_period == s.period)
+            ).all()
             for o in unhidden:
                 o.replaced_by_period = None
-        session.execute(delete(table).where(table.period == s.period, from_excel(table)))
+        session.execute(delete(table).where(table.firm_id == firm_id, table.period == s.period, from_excel(table)))
         if plan.replaces_ids:
             # ...unless the new sheet has them again, in which case they're hidden again here.
             session.execute(update(Order).where(Order.id.in_(plan.replaces_ids)).values(replaced_by_period=s.period))
         session.add_all(
-            table(**row, upload_id=upload.id, sheet_name=s.sheet_name, period=s.period) for row in plan.rows
+            table(**row, upload_id=upload.id, firm_id=firm_id, sheet_name=s.sheet_name, period=s.period)
+            for row in plan.rows
         )
         session.flush()
         _rehome(session, [o for o in unhidden if o.id not in plan.replaces_ids])
@@ -166,7 +174,8 @@ def _rehome(session: Session, orders: list[Order]) -> Counter:
     shown = Counter()
     for o in orders:
         later = session.exec(
-            select(Order).where(VISIBLE, Order.customer == o.customer, Order.period > o.period, Order.id != o.id)
+            select(Order).where(VISIBLE, Order.firm_id == o.firm_id, Order.customer == o.customer,
+                                Order.period > o.period, Order.id != o.id)
             .order_by(Order.period)
         ).all()
         match = next((x for x in later if same_order(x.model_dump(), o.model_dump())), None)
@@ -176,17 +185,21 @@ def _rehome(session: Session, orders: list[Order]) -> Counter:
     return shown
 
 
-def delete_period(session: Session, kind: str, period: str) -> dict:
-    """Remove a month (orders) or a financial year (quotations) that came from Excel. Rows typed into
-    the app are kept. Doesn't commit."""
+def delete_period(session: Session, kind: str, period: str, firm_id: int) -> dict:
+    """Remove one firm's month (orders) or financial year (quotations) that came from Excel. Rows typed
+    into the app are kept. Doesn't commit."""
     table = TABLES[kind]
-    rows = session.exec(select(func.count()).select_from(table).where(table.period == period, from_excel(table))).one()
-    orphans = session.exec(select(Order).where(Order.replaced_by_period == period)).all() if kind == "orders" else []
-    session.execute(delete(table).where(table.period == period, from_excel(table)))
+    in_period = (table.firm_id == firm_id, table.period == period, from_excel(table))
+    rows = session.exec(select(func.count()).select_from(table).where(*in_period)).one()
+    orphans = session.exec(
+        select(Order).where(Order.firm_id == firm_id, Order.replaced_by_period == period)
+    ).all() if kind == "orders" else []
+    session.execute(delete(table).where(*in_period))
     session.flush()
     shown = _rehome(session, orphans)
     return {
         "type": kind,
+        "firm_id": firm_id,
         "period": period,
         "label": period_label(period),
         "rows": rows,
@@ -198,8 +211,8 @@ def delete_upload(session: Session, upload: Upload) -> list[dict]:
     """Remove every month/year whose data came from this upload, then the upload itself. Doesn't commit."""
     results = []
     for kind, table in TABLES.items():
-        periods = session.exec(select(table.period).where(table.upload_id == upload.id).distinct()).all()
-        results += [delete_period(session, kind, p) for p in sorted(periods)]
+        periods = session.exec(select(table.firm_id, table.period).where(table.upload_id == upload.id).distinct()).all()
+        results += [delete_period(session, kind, period, firm_id) for firm_id, period in sorted(periods)]
     session.execute(delete(StoredFile).where(StoredFile.upload_id == upload.id))
     session.delete(upload)
     return results

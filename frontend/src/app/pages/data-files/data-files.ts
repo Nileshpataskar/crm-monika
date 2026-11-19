@@ -3,6 +3,7 @@ import { Component, computed, effect, inject, signal, untracked } from '@angular
 import { Observable, forkJoin } from 'rxjs';
 import { Api, errorMessage } from '../../core/api';
 import { Auth } from '../../core/auth';
+import { Firms } from '../../core/firms';
 import { DeleteResult, Period, Upload } from '../../core/models';
 import { UploadDialog } from '../../core/upload-dialog';
 import { ConfirmDialog } from '../../shared/confirm-dialog';
@@ -25,6 +26,7 @@ export class DataFilesPage {
   private api = inject(Api);
   protected auth = inject(Auth);
   protected upload = inject(UploadDialog);
+  protected firms = inject(Firms);
 
   protected periods = signal<Period[]>([]);
   protected uploads = signal<Upload[]>([]);
@@ -35,11 +37,15 @@ export class DataFilesPage {
   protected viewing = signal<{ id: number; filename: string } | null>(null);
   protected pending = signal<PendingDelete | null>(null);
   protected deleting = signal(false);
-  protected backingUp = signal(false);
+  protected backingUp = signal<number | null>(null); // the firm whose backup is being prepared
 
-  protected months = computed(() => this.periods().filter((p) => p.type === 'orders'));
-  protected years = computed(() => this.periods().filter((p) => p.type === 'quotations'));
-  protected monthsThenYears = computed(() => [...this.months(), ...this.years()]);
+  /** One section per firm: its months first, then its quotation years. */
+  protected byFirm = computed(() =>
+    this.firms.list().map((firm) => {
+      const mine = this.periods().filter((p) => p.firm_id === firm.id);
+      return { firm, periods: [...mine.filter((p) => p.type === 'orders'), ...mine.filter((p) => p.type === 'quotations')] };
+    }),
+  );
   /** upload id -> upload, to know whether a month's source file can still be opened */
   private uploadsById = computed(() => new Map(this.uploads().map((u) => [u.id, u])));
 
@@ -80,23 +86,23 @@ export class DataFilesPage {
     });
   }
 
-  downloadBackup() {
-    this.backingUp.set(true);
-    this.api.exportExcel('all').subscribe({
+  downloadBackup(firm: number) {
+    this.backingUp.set(firm);
+    this.api.exportExcel('all', firm).subscribe({
       next: (res) => {
         saveResponse(res, 'Backup.xlsx');
-        this.backingUp.set(false);
+        this.backingUp.set(null);
       },
       error: (err) => {
         this.error.set(errorMessage(err, 'Backup failed.'));
-        this.backingUp.set(false);
+        this.backingUp.set(null);
       },
     });
   }
 
   askDeletePeriod(p: Period) {
     const what = p.type === 'orders' ? p.label : `quotations ${p.label}`;
-    this.ask(`Delete ${what}?`, (dryRun) => this.api.deletePeriod(p.type, p.period, dryRun));
+    this.ask(`Delete ${what} of ${this.firms.name(p.firm_id)}?`, (dryRun) => this.api.deletePeriod(p.firm_id, p.type, p.period, dryRun));
   }
 
   askDeleteUpload(u: Upload) {

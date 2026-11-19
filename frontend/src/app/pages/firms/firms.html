@@ -1,0 +1,146 @@
+<div class="max-w-[1400px] mx-auto px-4 py-5 lg:px-8 lg:py-7">
+  <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+    <div>
+      <h1>Firms</h1>
+      <p class="mt-1 text-ink-2">The businesses you run. Each firm's orders, quotations and uploaded files are kept separately.</p>
+    </div>
+    @if (auth.isAdmin()) {
+      <button class="btn btn-primary" (click)="editing.set('new')"><span class="icon">add_business</span>Add firm</button>
+    }
+  </div>
+
+  @if (notice()) {
+    <div class="alert success mb-4"><span class="icon">check_circle</span>{{ notice() }}</div>
+  }
+  @if (error()) {
+    <div class="alert error mb-4"><span class="icon">error</span>{{ error() }}</div>
+  }
+
+  @if (loading()) {
+    <div class="grid gap-4 lg:grid-cols-2">
+      @for (i of [1, 2]; track i) { <div class="card h-[300px] animate-pulse"></div> }
+    </div>
+  } @else {
+    <div class="grid gap-4 lg:grid-cols-2">
+      @for (firm of firms.active(); track firm.id; let first = $first, last = $last) {
+        @let s = stats(firm);
+        <div class="card flex flex-col">
+          <!-- Name -->
+          <div class="flex items-start gap-4 p-5 pb-4">
+            <span class="icon-tile green !text-[15px] font-bold">{{ initials(firm.name) }}</span>
+            <div class="flex-1 min-w-0">
+              <h2 class="!text-lg truncate">{{ firm.name }}</h2>
+              <div class="text-[13px] text-ink-3">
+                @if (s.last_upload) { Last upload {{ s.last_upload | date: 'd MMM y' }} } @else { No uploads yet }
+              </div>
+            </div>
+            @if (auth.isAdmin() && firms.active().length > 1) {
+              <div class="flex">
+                <button class="btn btn-ghost btn-sm !px-1.5" [disabled]="first" (click)="move(firm, 'up')" title="Move up in the menu" aria-label="Move up">
+                  <span class="icon">arrow_upward</span>
+                </button>
+                <button class="btn btn-ghost btn-sm !px-1.5" [disabled]="last" (click)="move(firm, 'down')" title="Move down in the menu" aria-label="Move down">
+                  <span class="icon">arrow_downward</span>
+                </button>
+              </div>
+            }
+          </div>
+
+          <!-- Numbers -->
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-line border-y border-line">
+            <div class="bg-surface px-5 py-3">
+              <div class="text-xl font-bold tabular-nums">{{ s.orders }}</div><div class="text-xs text-ink-3">Orders</div>
+            </div>
+            <div class="bg-surface px-5 py-3">
+              <div class="text-xl font-bold tabular-nums">{{ s.quotations }}</div><div class="text-xs text-ink-3">Quotations</div>
+            </div>
+            <div class="bg-surface px-5 py-3">
+              <div class="text-xl font-bold tabular-nums">{{ s.invoiced | inr: 'compact' }}</div><div class="text-xs text-ink-3">Invoiced</div>
+            </div>
+            <div class="bg-surface px-5 py-3">
+              <div class="text-xl font-bold tabular-nums" [class.text-serious-ink]="s.outstanding > 0">{{ s.outstanding | inr: 'compact' }}</div>
+              <div class="text-xs text-ink-3">Outstanding</div>
+            </div>
+          </div>
+
+          <!-- Details -->
+          <dl class="grid grid-cols-[120px_1fr] gap-y-2 px-5 py-4 text-[13px] flex-1">
+            <dt class="text-ink-3">GSTIN</dt><dd class="tabular-nums">{{ firm.gstin ?? '—' }}</dd>
+            <dt class="text-ink-3">Contact</dt><dd>{{ firm.contact_person ?? '—' }}</dd>
+            <dt class="text-ink-3">Phone</dt>
+            <dd>@if (firm.phone) { <a class="text-accent hover:underline" [href]="'tel:' + firm.phone">{{ firm.phone }}</a> } @else { — }</dd>
+            <dt class="text-ink-3">Email</dt>
+            <dd class="truncate">@if (firm.email) { <a class="text-accent hover:underline" [href]="'mailto:' + firm.email">{{ firm.email }}</a> } @else { — }</dd>
+            <dt class="text-ink-3">Address</dt><dd class="whitespace-pre-line">{{ firm.address ?? '—' }}</dd>
+            @if (firm.notes) {
+              <dt class="text-ink-3">Notes</dt><dd class="whitespace-pre-line text-ink-2">{{ firm.notes }}</dd>
+            }
+          </dl>
+
+          <!-- Actions -->
+          <div class="flex flex-wrap items-center gap-2 px-5 py-3 border-t border-line bg-surface-2 rounded-b-xl">
+            <a class="btn btn-sm" [routerLink]="['/orders', firm.id]"><span class="icon">inventory_2</span>Orders</a>
+            <a class="btn btn-sm" [routerLink]="['/quotations', firm.id]"><span class="icon">request_quote</span>Quotations</a>
+            <a class="btn btn-sm" routerLink="/dashboard" [queryParams]="{ firm: firm.id }"><span class="icon">dashboard</span>Dashboard</a>
+            @if (auth.isAdmin()) {
+              <span class="flex-1"></span>
+              <button class="btn btn-sm" (click)="editing.set(firm)"><span class="icon">edit</span>Edit</button>
+              @if (hasData(firm)) {
+                <button class="btn btn-sm btn-ghost" (click)="askArchive(firm)" [disabled]="firms.active().length === 1"
+                        [title]="firms.active().length === 1 ? 'The only active firm can\'t be archived' : 'Hide from menus and the dashboard, keep the data'">
+                  <span class="icon">inventory</span>Archive
+                </button>
+              } @else {
+                <button class="btn btn-sm btn-ghost !text-critical-ink hover:!bg-critical-soft" (click)="askDelete(firm)"
+                        [disabled]="firms.active().length === 1">
+                  <span class="icon">delete</span>Delete
+                </button>
+              }
+            }
+          </div>
+        </div>
+      }
+    </div>
+
+    <!-- Archived firms -->
+    @if (archived().length) {
+      <h2 class="section-title mt-8">Archived firms</h2>
+      <div class="card overflow-hidden">
+        <ul class="divide-y divide-line">
+          @for (firm of archived(); track firm.id) {
+            @let s = stats(firm);
+            <li class="flex flex-wrap items-center gap-3 px-5 py-3.5">
+              <span class="icon-tile soft !size-9 text-ink-3 bg-neutral-soft"><span class="icon !text-xl">inventory</span></span>
+              <div class="flex-1 min-w-0">
+                <div class="font-medium truncate">{{ firm.name }}</div>
+                <div class="text-xs text-ink-3">
+                  Archived {{ firm.archived_at | date: 'd MMM y' }} · {{ s.orders }} orders · {{ s.quotations }} quotations · {{ s.uploads }} files
+                </div>
+              </div>
+              <a class="btn btn-sm" [routerLink]="['/orders', firm.id]">View orders</a>
+              @if (auth.isAdmin()) {
+                <button class="btn btn-sm btn-primary" (click)="restore(firm)"><span class="icon">unarchive</span>Restore</button>
+                @if (!hasData(firm)) {
+                  <button class="btn btn-sm btn-ghost !text-critical-ink hover:!bg-critical-soft" (click)="askDelete(firm)" aria-label="Delete">
+                    <span class="icon">delete</span>
+                  </button>
+                }
+              }
+            </li>
+          }
+        </ul>
+      </div>
+    }
+  }
+</div>
+
+@if (editing(); as e) {
+  <app-firm-form [firm]="e === 'new' ? null : e" (saved)="onSaved($event, e === 'new')" (closed)="editing.set(null)" />
+}
+
+@if (pending(); as p) {
+  <app-confirm-dialog [title]="p.title" [confirmLabel]="p.confirmLabel" [danger]="p.danger" [busy]="busy()"
+                      (confirmed)="confirm()" (cancelled)="pending.set(null)">
+    {{ p.message }}
+  </app-confirm-dialog>
+}

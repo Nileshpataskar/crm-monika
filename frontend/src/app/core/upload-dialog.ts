@@ -7,11 +7,14 @@ import { Injectable, signal } from '@angular/core';
 @Injectable({ providedIn: 'root' })
 export class UploadDialog {
   readonly isOpen = signal(false);
+  /** The firm the file is for, when opened from that firm's page. null = the user must choose. */
+  readonly firm = signal<number | null>(null);
 
   /** Goes up by one whenever data changes (import or delete). Pages read it in an effect to reload. */
   readonly version = signal(0);
 
-  open() {
+  open(firm: number | null = null) {
+    this.firm.set(firm);
     this.isOpen.set(true);
   }
 
